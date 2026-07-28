@@ -12,7 +12,7 @@ final class SleepAssertion: @unchecked Sendable {
             let result = IOPMAssertionCreateWithName(
                 kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
                 IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                "Sottoで会議を録音中" as CFString,
+                "Sottoで音声を録音中" as CFString,
                 &createdID
             )
             guard result == kIOReturnSuccess else {

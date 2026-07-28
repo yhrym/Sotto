@@ -13,6 +13,7 @@ final class RecordingStorage {
     private let fileManager: FileManager
     private let bookmarkStore: SecurityScopedBookmarkStore
     private var scopedURL: ResolvedSecurityScopedURL?
+    private var bookmarkResolutionError: (any Swift.Error)?
 
     init(
         fileManager: FileManager = .default,
@@ -20,7 +21,11 @@ final class RecordingStorage {
     ) {
         self.fileManager = fileManager
         self.bookmarkStore = bookmarkStore
-        scopedURL = try? bookmarkStore.resolve()
+        do {
+            scopedURL = try bookmarkStore.resolve()
+        } catch {
+            bookmarkResolutionError = error
+        }
     }
 
     var currentFolderURL: URL {
@@ -37,13 +42,21 @@ final class RecordingStorage {
     }
 
     func selectFolder(_ url: URL) throws {
-        try bookmarkStore.save(url: url)
-        let resolved = try bookmarkStore.resolve()
-        scopedURL = resolved
+        let previousBookmark = bookmarkStore.storedBookmarkData()
+        do {
+            try bookmarkStore.save(url: url)
+            let resolved = try bookmarkStore.resolve()
+            scopedURL = resolved
+            bookmarkResolutionError = nil
+        } catch {
+            bookmarkStore.restoreStoredBookmarkData(previousBookmark)
+            throw error
+        }
     }
 
     func restoreDefaultFolder() {
         scopedURL = nil
+        bookmarkResolutionError = nil
         bookmarkStore.clear()
     }
 
@@ -51,15 +64,23 @@ final class RecordingStorage {
         bookmarkStore.storedBookmarkData()
     }
 
+    func accessibleFolderURL() throws -> URL {
+        if let bookmarkResolutionError {
+            throw bookmarkResolutionError
+        }
+        return currentFolderURL
+    }
+
     func recordingFolder(for date: Date) throws -> URL {
+        let baseURL = try accessibleFolderURL()
         let day = Self.dayFormatter.string(from: date)
-        let folder = currentFolderURL.appending(path: day, directoryHint: .isDirectory)
+        let folder = baseURL.appending(path: day, directoryHint: .isDirectory)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }
 
     func latestRecordingURL() throws -> URL? {
-        let baseURL = currentFolderURL
+        let baseURL = try accessibleFolderURL()
         guard fileManager.fileExists(atPath: baseURL.path) else {
             return nil
         }

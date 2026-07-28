@@ -2,15 +2,15 @@ import Foundation
 
 struct TranscriptMerger: Sendable {
     func merge(
-        meeting: [TranscriptEntry],
+        system: [TranscriptEntry],
         selfSpeaker: [TranscriptEntry]
     ) -> [TranscriptEntry] {
-        (meeting + selfSpeaker).sorted { lhs, rhs in
+        (system + selfSpeaker).sorted { lhs, rhs in
             if lhs.startTime != rhs.startTime {
                 return lhs.startTime < rhs.startTime
             }
             if lhs.speaker != rhs.speaker {
-                return lhs.speaker == .meeting
+                return lhs.speaker == .system
             }
             return lhs.text < rhs.text
         }

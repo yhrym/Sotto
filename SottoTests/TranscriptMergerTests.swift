@@ -4,21 +4,21 @@ import Testing
 
 struct TranscriptMergerTests {
     @Test
-    func mergesByTimestampWithMeetingFirstForTies() {
-        let meeting = [
-            TranscriptEntry(startTime: 7, speaker: .meeting, text: "後"),
-            TranscriptEntry(startTime: 3, speaker: .meeting, text: "会議")
+    func mergesByTimestampWithSystemFirstForTies() {
+        let system = [
+            TranscriptEntry(startTime: 7, speaker: .system, text: "後"),
+            TranscriptEntry(startTime: 3, speaker: .system, text: "システム")
         ]
         let selfSpeaker = [
             TranscriptEntry(startTime: 3, speaker: .selfSpeaker, text: "自分")
         ]
 
         let merged = TranscriptMerger().merge(
-            meeting: meeting,
+            system: system,
             selfSpeaker: selfSpeaker
         )
 
-        #expect(merged.map(\.text) == ["会議", "自分", "後"])
+        #expect(merged.map(\.text) == ["システム", "自分", "後"])
     }
 
     @Test
@@ -42,7 +42,7 @@ struct TranscriptMergerTests {
             entries: [
                 TranscriptEntry(
                     startTime: 3,
-                    speaker: .meeting,
+                    speaker: .system,
                     text: "おはようございます"
                 ),
                 TranscriptEntry(
@@ -55,7 +55,7 @@ struct TranscriptMergerTests {
         )
 
         #expect(markdown.contains("# 2026-07-28 14:30:12 (52分13秒)"))
-        #expect(markdown.contains("- [00:00:03] 会議: おはようございます"))
+        #expect(markdown.contains("- [00:00:03] システム: おはようございます"))
         #expect(markdown.contains("- [00:00:07] 自分: よろしくお願いします"))
     }
 }

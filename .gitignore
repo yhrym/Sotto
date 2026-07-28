@@ -30,10 +30,16 @@ build/
 
 # Local recordings and transcription scratch/output
 *.m4a
+*.aac
 *.caf
 *.wav
 *.mp3
 Recordings/
+20??-??-??_??????*.md
+TranscriptionJobs/
+
+# Local release packaging
+/dist/
 
 # Local environment and credentials
 .env

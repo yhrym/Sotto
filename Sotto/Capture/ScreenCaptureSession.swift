@@ -8,6 +8,7 @@ import ScreenCaptureKit
 enum ScreenCaptureSessionError: LocalizedError {
     case noDisplay
     case normalizerUnavailable
+    case captureAlreadyActive
 
     var errorDescription: String? {
         switch self {
@@ -15,7 +16,25 @@ enum ScreenCaptureSessionError: LocalizedError {
             "録音対象にできるディスプレイが見つかりません。"
         case .normalizerUnavailable:
             "48 kHz / 2chの音声変換器を初期化できません。"
+        case .captureAlreadyActive:
+            "録音または入力チェックがすでに実行中です。"
         }
+    }
+}
+
+private actor ScreenCaptureGate {
+    static let shared = ScreenCaptureGate()
+    private var owner: UUID?
+
+    func acquire(owner requestedOwner: UUID) -> Bool {
+        guard owner == nil else { return false }
+        owner = requestedOwner
+        return true
+    }
+
+    func release(owner requestedOwner: UUID) {
+        guard owner == requestedOwner else { return }
+        owner = nil
     }
 }
 
@@ -34,6 +53,7 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let microphoneQueue = DispatchQueue(label: "jp.sotto.capture.microphone")
     private let screenQueue = DispatchQueue(label: "jp.sotto.capture.discarded-video")
     private let stateLock = NSLock()
+    private let gateOwner = UUID()
     private var stream: SCStream?
     private var stoppingNormally = false
     private var loggedSystemFormat = false
@@ -52,6 +72,18 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     func start() async throws {
+        guard await ScreenCaptureGate.shared.acquire(owner: gateOwner) else {
+            throw ScreenCaptureSessionError.captureAlreadyActive
+        }
+        do {
+            try await startCapture()
+        } catch {
+            await ScreenCaptureGate.shared.release(owner: gateOwner)
+            throw error
+        }
+    }
+
+    private func startCapture() async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
             onScreenWindowsOnly: false
@@ -98,12 +130,17 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
     func stop() async throws {
         let currentStream: SCStream? = stateLock.withLock {
             stoppingNormally = true
-            return stream
-        }
-        try await currentStream?.stopCapture()
-        stateLock.withLock {
+            let current = stream
             stream = nil
+            return current
         }
+        do {
+            try await currentStream?.stopCapture()
+        } catch {
+            await ScreenCaptureGate.shared.release(owner: gateOwner)
+            throw error
+        }
+        await ScreenCaptureGate.shared.release(owner: gateOwner)
     }
 
     func stream(
@@ -132,8 +169,11 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
             self.stream = nil
             return stoppingNormally
         }
-        if !expected {
-            stopHandler(error)
+        Task { [stopHandler] in
+            await ScreenCaptureGate.shared.release(owner: gateOwner)
+            if !expected {
+                stopHandler(error)
+            }
         }
     }
 

@@ -29,8 +29,15 @@ enum AssetWriterSinkError: LocalizedError {
     }
 }
 
+protocol RecordingAudioWriter: AnyObject, Sendable {
+    @discardableResult
+    func append(_ chunk: CapturedAudioChunk) -> Bool
+    func finish() async throws
+    func cancel()
+}
+
 /// Incremental AAC/m4a writer with bounded memory and fragmented output.
-final class AssetWriterSink: @unchecked Sendable {
+final class AssetWriterSink: RecordingAudioWriter, @unchecked Sendable {
     typealias FailureHandler = @Sendable (Error) -> Void
 
     private let writer: AVAssetWriter
@@ -147,6 +154,17 @@ final class AssetWriterSink: @unchecked Sendable {
                     }
                 }
             }
+        }
+    }
+
+    func cancel() {
+        let shouldCancel = stateLock.withLock {
+            guard !isFinishing else { return false }
+            isFinishing = true
+            return true
+        }
+        if shouldCancel {
+            writer.cancelWriting()
         }
     }
 

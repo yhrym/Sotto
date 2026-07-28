@@ -2,11 +2,11 @@
 
 ## 1. 目的と前提
 
-Sotto は、参加者全員の同意を得た会議を録音する macOS メニューバーアプリである。Teams、Google Meet などの特定アプリには依存せず、ScreenCaptureKit でシステム全体の音声とマイク音声を取得する。録音停止後、Speech framework のオンデバイス認識だけを使って日本語文字起こしを行う。
+Sotto は、他人の音声を録音する場合に対象者全員の明示的な同意を得たうえで、システム全体の音声とマイク音声を録音する macOS メニューバーアプリである。特定アプリには依存せず、ScreenCaptureKit で2系統の音声を取得する。録音停止後、Speech framework のオンデバイス認識だけを使って日本語文字起こしを行う。
 
 Developer ID による署名、公証、自動更新は行わない。ソースからXcodeの `Sign to Run Locally` でビルドするか、GitHub Releasesで公開するad-hoc署名済みバイナリを利用する。
 
-最優先の安全要件は、音声、文字起こし結果、および会議メタデータをネットワークへ送らないことである。App Sandbox を有効にし、`com.apple.security.network.client` と `com.apple.security.network.server` は付与しない。外部ライブラリ、分析、テレメトリ、クラッシュレポート、自動更新、外部 API は組み込まない。
+最優先の安全要件は、音声、文字起こし結果、および録音メタデータをネットワークへ送らないことである。App Sandbox を有効にし、`com.apple.security.network.client` と `com.apple.security.network.server` は付与しない。外部ライブラリ、分析、テレメトリ、クラッシュレポート、自動更新、外部 API は組み込まない。
 
 ## 2. 対象環境
 
@@ -32,11 +32,13 @@ Sotto/
 │   └── AppDelegate.swift
 ├── Capture/
 │   ├── ScreenCaptureSession.swift
+│   ├── SottoInputMonitor.swift
 │   ├── CapturePermissionController.swift
 │   ├── AudioDeviceMonitor.swift
 │   └── SleepAssertion.swift
 ├── Audio/
 │   ├── CapturedAudioChunk.swift
+│   ├── AudioLevelMeter.swift
 │   ├── AudioFormatNormalizer.swift
 │   ├── PCMDistributor.swift
 │   ├── TimelineRingBuffer.swift
@@ -97,6 +99,7 @@ docs/
 
 - `RecordingCoordinator`: 録音状態を所有する actor。開始、停止、ストリーム障害からの分割再開を直列化する。
 - `ScreenCaptureSession`: `SCStream` を構成し、`.audio`、`.microphone`、`.screen` を受信する。映像サンプルは即座に破棄する。
+- `SottoInputMonitor`: 設定画面の入力チェック用に `SCStream` を開始し、音量スカラーだけを UI へ渡す。writer、文字起こし、一時ファイル、スリープ抑止は使用しない。
 - `RecordingPipeline`: 1 セグメント分のフォーマット変換、購読、ミックス、ファイル書き出しを構築し、正常に閉じる。
 - `SleepAssertion`: 録音中だけ `kIOPMAssertPreventUserIdleSystemSleep` を保持する。ディスプレイスリープは妨げない。
 - `AudioDeviceMonitor`: 入力デバイス変更や `SCStream` 停止を検知し、コーディネーターへ通知する。
@@ -109,13 +112,14 @@ docs/
 - `TimelineRingBuffer`: 48 kHz の絶対フレーム位置をキーにサンプルを保持する固定上限リングバッファ。
 - `TimestampedAudioMixer`: 2 系統を PTS で整列し、欠損を無音補完してゲインを掛け、クランプしたステレオ PCM を生成する。
 - `AssetWriterSink`: PCM を AAC に逐次変換し、`AVAssetWriter` へ append する。出力ファイルごとに専用 writer を持つ。
+- `AudioLevelMeter`: PCM の RMS を UI 用の 0...1 に変換する。音声サンプルは保持しない。
 
 ### 4.4 文字起こし
 
 - `SpeechModelManager`: 日本語ロケールの対応確認、モデル資産の導入要求、ダウンロード進捗、予約と解放を管理する。
 - `TranscriptionQueue`: 録音系から独立した直列ジョブキュー。処理中も新しい録音を許可する。
 - `SpeechFileTranscriber`: `SpeechTranscriber` と `SpeechAnalyzer` で 1 音源をオンデバイス認識する。
-- `TranscriptMerger`: 系統別の結果に `会議` / `自分` を付け、開始時刻で安定ソートする。
+- `TranscriptMerger`: 系統別の結果に `システム` / `自分` を付け、開始時刻で安定ソートする。
 - `MarkdownTranscriptWriter`: 同名の `.md` を一時ファイル経由で atomic に保存する。
 - `TranscriptionJobStore`: 未完了、失敗、完了したジョブの最小 manifest を Application Support に永続化する。
 
@@ -181,7 +185,13 @@ configuration.showsCursor = false
 
 `.audio` はシステム音声、`.microphone` はマイク音声として別々の serial queue で受ける。音声のみでも映像ストリーム構成が必要なため、最小解像度と低いフレームレートを指定する。`.screen` の callback はピクセルバッファをコピーせず即座に戻り、録画や画像処理をしない。
 
-SDK の仕様上、マイク入力が設定した sample rate / channel count と異なる実フォーマットで到着する場合がある。両系統の実フォーマットを起動時と変更時にローカルログへ残し、`AudioFormatNormalizer` で必ず内部標準形式へ変換する。ログに会議名、音声内容、文字起こし内容は記録しない。
+SDK の仕様上、マイク入力が設定した sample rate / channel count と異なる実フォーマットで到着する場合がある。両系統の実フォーマットを起動時と変更時にローカルログへ残し、`AudioFormatNormalizer` で必ず内部標準形式へ変換する。ログに録音対象の名称、音声内容、文字起こし内容は記録しない。
+
+### 6.1 入力チェック
+
+設定画面の「入力チェックを開始」は録音とは別の `SottoInputMonitor` を使う。受信した2系統の PCM は RMS 計算後に破棄し、ファイルや文字起こしジョブを作らない。設定画面を閉じたとき、停止ボタンを押したとき、または録音を開始するときに停止する。
+
+`ScreenCaptureGate` により、入力チェックと録音の `SCStream` は同時に1本だけ存在できる。権限待機中や stream 起動中に停止された場合は世代番号で古い callback を無視し、停止完了を待ってから録音を開始する。
 
 ## 7. 2 系統の同期とミックス
 
@@ -201,7 +211,7 @@ frameIndex = round((PTS - epoch) × 48,000)
 
 両系統のチャンクが揃っている範囲は即時処理する。一方が未着でも、遅延許容 watermark を超えた範囲は欠損系統を無音として確定する。遅れて届いた過去のフレームは差し込まず破棄し、以降のタイムラインをずらさない。
 
-バッファは録音時間に比例して増やさず、許容遅延と writer の backpressure を吸収する固定上限にする。上限超過は無制限のメモリ消費を避けるため、セグメントの安全な終了と再開、または録音停止エラーとして扱う。
+バッファは録音時間に比例して増やさず、許容遅延と writer の backpressure を吸収する固定上限にする。1 callbackで生成するPCMは既定2秒までとし、それを超えるPTS断絶を検出した場合は原因となったチャンクを取り消す。連続している範囲だけを確定して、セグメントの安全な終了と再開へ移る。
 
 ### 7.3 ミックス
 
@@ -235,6 +245,7 @@ mic PCM ────┬─ TimestampedAudioMixer
 - 片方がない区間を無音として処理する
 - 逆順到着でも PTS 順に出力する
 - 遅着サンプルで確定済み時刻がずれない
+- 大きな PTS 断絶で無音 PCM を大量生成せず、連続範囲だけを確定する
 - 長時間相当のチャンク列でサンプル数と時刻がドリフトしない
 - mono / 異 sample rate 入力を 48 kHz stereo へ変換する
 
@@ -259,7 +270,7 @@ mic PCM ────┬─ TimestampedAudioMixer
 
 中断耐性を上げるため fragmented writing を有効にする。初回 fragment を短くし、その後も定期的に fragment を確定する。異常終了前に確定した fragment を再生できることを実機テストする。ただし、最初の fragment が完成する前のプロセス強制終了に対し、再生可能性を完全には保証できない。
 
-正常停止時は入力を mark finished し、`finishWriting()` の完了を待ってからジョブを投入する。文字起こし失敗時も通常録音は変更も削除もしない。
+正常停止時は入力を mark finished し、`finishWriting()` の完了を待ってからジョブを投入する。1本のwriterやタイムラインの終了に失敗しても、残りのwriterはすべて終了を試み、最後にエラーを集約する。文字起こし失敗時も通常録音は変更も削除もしない。
 
 ## 9. 録音前検査と権限フロー
 
@@ -278,17 +289,19 @@ mic PCM ────┬─ TimestampedAudioMixer
 
 権限ダイアログの再表示可否は OS が管理する。すでに拒否済みならアプリ内で繰り返し要求せず、システム設定への案内を表示する。画面収録権限の変更後、OS の要求に応じてアプリ再起動を案内する。
 
+保存済みbookmarkの解決またはsecurity scope開始に失敗した場合は、既定フォルダへ黙って切り替えない。録音を開始せず、保存先の再選択またはデフォルトへの復帰を案内する。
+
 `Info.plist` には日本語の用途説明を含める。
 
 ```text
 NSScreenCaptureUsageDescription
-会議のシステム音声を録音するために画面とシステムオーディオへのアクセスを使用します。
+システム音声を録音するために画面とシステムオーディオへのアクセスを使用します。
 
 NSMicrophoneUsageDescription
-会議で自分の音声を録音するためにマイクを使用します。
+マイクの音声を録音するために使用します。
 
 NSSpeechRecognitionUsageDescription
-録音した会議音声を端末内で文字起こしするために使用します。
+録音した音声を端末内で文字起こしするために使用します。
 ```
 
 ## 10. スリープとデバイス変更
@@ -335,7 +348,7 @@ let analyzer = SpeechAnalyzer(modules: [transcriber])
 
 必要なモデル資産は `AssetInventory.assetInstallationRequest(supporting:)` から要求する。要求が返った場合は `Progress.fractionCompleted` を監視し、メニューにダウンロード進捗を表示する。全ジョブはモデル準備完了まで `waitingForModel` で待機する。
 
-モデル導入は OS が管理する Speech 資産に対する操作であり、会議音声やメタデータを渡さない。Sotto 自身にはネットワーク client entitlement がない。モデルの予約と解放は SDK の `reserve(locale:)` / `release(reservedLocale:)` に合わせ、アプリ終了や処理完了で解放する。
+モデル導入は OS が管理する Speech 資産に対する操作であり、録音音声やメタデータを渡さない。Sotto 自身にはネットワーク client entitlement がない。モデルの予約と解放は SDK の `reserve(locale:)` / `release(reservedLocale:)` に合わせ、アプリ終了や処理完了で解放する。
 
 ### 11.3 ジョブ状態
 
@@ -377,24 +390,24 @@ recording
 ```swift
 struct TranscriptEntry {
     let startTime: Duration
-    let speaker: Speaker // meeting / self
+    let speaker: Speaker // system / self
     let text: String
     let sequence: Int
 }
 ```
 
-system の結果に `会議`、microphone の結果に `自分` を付ける。開始時刻で昇順に安定ソートし、同一時刻の場合は元の sequence で順序を固定する。空白だけの結果は除外し、文字列を正規化して Markdown の 1 項目とする。
+system の結果に `システム`、microphone の結果に `自分` を付ける。開始時刻で昇順に安定ソートし、同一時刻の場合は元の sequence で順序を固定する。空白だけの結果は除外し、文字列を正規化して Markdown の 1 項目とする。
 
 音声と同じフォルダへ、一時ファイルから atomic replace して保存する。
 
 ```markdown
 # 2026-07-28 14:30:12 (52分13秒)
 
-- [00:00:03] 会議: おはようございます
+- [00:00:03] システム: おはようございます
 - [00:00:07] 自分: よろしくお願いします
 ```
 
-両系統の認識と Markdown 保存が成功した後だけ cleanup へ進む。「一時ファイルを残す」が OFF なら分離ファイルを削除し、ON なら保持する。失敗時は設定に関係なく一時ファイルを保持する。通常録音はどの経路でも削除しない。
+両系統の認識と Markdown 保存が成功した後だけ cleanup へ進む。「一時ファイルを残す」が OFF なら分離ファイルを削除し、ON なら保持する。cleanup状態はmanifestへ永続化し、削除失敗や処理中断があれば次回起動または手動操作で再試行する。失敗時は設定に関係なく一時ファイルを保持する。通常録音はどの経路でも削除しない。
 
 ## 12. UI
 
@@ -449,9 +462,13 @@ entitlements は次に限定する。
 <true/>
 <key>com.apple.security.assets.music.read-write</key>
 <true/>
+<key>com.apple.security.files.bookmarks.app-scope</key>
+<true/>
 <key>com.apple.security.files.user-selected.read-write</key>
 <true/>
 ```
+
+`com.apple.security.files.bookmarks.app-scope` は、フォルダ選択後も再起動をまたいで保存先へアクセスするapp-scoped security-scoped bookmarkのために使用する。Release workflowでは、この5キーがすべて`true`であり、余分なentitlementがないことを完全一致で検査する。
 
 次は付与しない。
 
@@ -468,6 +485,7 @@ entitlements は次に限定する。
 - 通常録音ファイルをエラー回復や cleanup の対象として削除しない。
 - 開始前エラーでは出力ファイルを作らない。
 - writer 開始後のエラーでは、可能な限り `finishWriting()` して確定済み部分を残す。
+- 1本の writer の失敗で残りの writer の終了処理を短絡しない。
 - UI 向けエラーはユーザーが取れる行動を含む日本語にする。
 - 内部エラーには段階、日時、関連するローカル job ID を含めるが、音声内容や文字起こし本文をログへ出さない。
 - 権限不足、ディスク不足、モデル非対応、一時ファイル消失、writer failure を区別する。
@@ -487,26 +505,30 @@ entitlements は次に限定する。
 - ジョブ状態の永続化と再開
 - 文字起こし OFF 時に一時 writer を作らない
 - 正常時と失敗時の一時ファイル cleanup 条件
+- writer終了失敗、一時ファイル削除失敗、cleanup再入時の回復
+- 入力チェック停止後の遅延 callback 無視とゼロレベル通知
+- 権限待機中、stream 起動中の入力チェック停止と録音への安全な切り替え
 
 ### 16.2 実機テスト
 
 1. App Sandbox 有効、network client なしで起動する。
 2. 画面収録とマイクを許可する。
 3. システム音声とマイクを同じ `SCStream` から受信できる。
-4. 両系統の実フォーマットを確認する。
-5. 10 秒以上録音し、混合 `.m4a` を再生できる。
-6. system / microphone 一時 `.m4a` を個別再生できる。
-7. 日本語モデルを準備し、2 系統をオンデバイス認識できる。
-8. 同名 `.md` が生成され、時刻順とラベルが正しい。
-9. 文字起こし中に次の録音を開始できる。
-10. AirPods 接続、切断で確定済みファイルが壊れず、part ファイルへ再開する。
-11. 録音中のアプリ強制終了後、確定済み fragment を再生できる。
-12. 空き容量 1 GB 未満のボリュームで開始を拒否する。
-13. 権限拒否時に対応するシステム設定を開ける。
-14. カスタム保存先が再起動後も security-scoped bookmark で利用できる。
-15. ログイン項目の ON / OFF が OS 設定へ反映される。
-16. `codesign` で Sandbox と必要 entitlement のみを確認する。
-17. 録音中に Sotto プロセスの外向き接続がないことを確認する。
+4. 入力チェックで両系統のレベルが動き、ファイルが作られない。
+5. 両系統の実フォーマットを確認する。
+6. 10 秒以上録音し、混合 `.m4a` を再生できる。
+7. system / microphone 一時 `.m4a` を個別再生できる。
+8. 日本語モデルを準備し、2 系統をオンデバイス認識できる。
+9. 同名 `.md` が生成され、時刻順とラベルが正しい。
+10. 文字起こし中に次の録音を開始できる。
+11. AirPods 接続、切断で確定済みファイルが壊れず、part ファイルへ再開する。
+12. 録音中のアプリ強制終了後、確定済み fragment を再生できる。
+13. 空き容量 1 GB 未満のボリュームで開始を拒否する。
+14. 権限拒否時に対応するシステム設定を開ける。
+15. カスタム保存先が再起動後も security-scoped bookmark で利用できる。
+16. ログイン項目の ON / OFF が OS 設定へ反映される。
+17. `codesign` で Sandbox と必要 entitlement のみを確認する。
+18. 録音中に Sotto プロセスの外向き接続がないことを確認する。
 
 ## 17. 実装順序と停止条件
 
@@ -531,6 +553,7 @@ entitlements は次に限定する。
 
 - `Sign to Run Locally` でビルドし、macOS 26.0 以上で起動する。
 - MenuBarExtra から録音を開始、停止できる。
+- 設定画面で録音せずに2系統の入力レベルを確認できる。
 - システム音声とマイクを同期して混合したステレオ AAC `.m4a` が生成される。
 - 文字起こし ON 時だけ分離一時ファイルが生成される。
 - 停止後にオンデバイス日本語文字起こしが走り、話者ラベル付き `.md` が生成される。

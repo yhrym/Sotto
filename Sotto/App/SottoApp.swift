@@ -20,10 +20,12 @@ struct SottoApp: App {
             let recordingService = try SottoRecordingService(
                 transcriptionQueue: queue
             )
+            let inputMonitor = SottoInputMonitor()
             _appModel = StateObject(
                 wrappedValue: AppModel(
                     recordingService: recordingService,
-                    transcriptionService: transcriptionService
+                    transcriptionService: transcriptionService,
+                    inputMonitor: inputMonitor
                 )
             )
         } catch {

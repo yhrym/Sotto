@@ -1,5 +1,28 @@
 import Foundation
 
+struct RecordingPipelineFinalizationError: LocalizedError, Sendable {
+    enum Target: String, Equatable, Sendable {
+        case mixedTimeline = "ミックス音声タイムライン"
+        case stemTimeline = "系統別音声タイムライン"
+        case mixedWriter = "ミックス音声ファイル"
+        case systemWriter = "システム音声一時ファイル"
+        case microphoneWriter = "マイク音声一時ファイル"
+    }
+
+    struct Failure: Equatable, Sendable {
+        let target: Target
+        let message: String
+    }
+
+    let failures: [Failure]
+
+    var errorDescription: String? {
+        failures
+            .map { "\($0.target.rawValue): \($0.message)" }
+            .joined(separator: "\n")
+    }
+}
+
 struct RecordingPipelineConfiguration: Sendable {
     let mixedFileURL: URL
     let systemStemURL: URL?
@@ -18,14 +41,20 @@ struct RecordingPipelineConfiguration: Sendable {
 final class RecordingPipeline: @unchecked Sendable {
     typealias FailureHandler = @Sendable (Error) -> Void
     typealias LevelHandler = @Sendable (AudioSource, Float) -> Void
+    typealias WriterFactory = @Sendable (
+        URL,
+        Int,
+        @escaping FailureHandler
+    ) throws -> any RecordingAudioWriter
 
     private let distributor = PCMDistributor()
+    private let failureHandler: FailureHandler
     private let levelHandler: LevelHandler
     private let mixedMixer: TimestampedAudioMixer
     private let stemSynchronizer: TimestampedAudioMixer?
-    private let mixedWriter: AssetWriterSink
-    private let systemWriter: AssetWriterSink?
-    private let microphoneWriter: AssetWriterSink?
+    private let mixedWriter: any RecordingAudioWriter
+    private let systemWriter: (any RecordingAudioWriter)?
+    private let microphoneWriter: (any RecordingAudioWriter)?
     private let mixedPathLock = NSLock()
     private let stemPathLock = NSLock()
     private var subscriptionIDs: [UUID] = []
@@ -33,38 +62,65 @@ final class RecordingPipeline: @unchecked Sendable {
     init(
         configuration: RecordingPipelineConfiguration,
         onFailure: @escaping FailureHandler,
-        onLevel: @escaping LevelHandler = { _, _ in }
+        onLevel: @escaping LevelHandler = { _, _ in },
+        writerFactory: @escaping WriterFactory = { url, bitRate, failureHandler in
+            try AssetWriterSink(
+                url: url,
+                bitRate: bitRate,
+                failureHandler: failureHandler
+            )
+        }
     ) throws {
+        failureHandler = onFailure
         levelHandler = onLevel
         var mixedConfiguration = TimestampedAudioMixer.Configuration()
         mixedConfiguration.systemGain = configuration.systemGain
         mixedConfiguration.microphoneGain = configuration.microphoneGain
         mixedMixer = TimestampedAudioMixer(configuration: mixedConfiguration)
-        mixedWriter = try AssetWriterSink(
-            url: configuration.mixedFileURL,
-            bitRate: configuration.bitRate,
-            failureHandler: onFailure
-        )
-
+        let createdSystemWriter: (any RecordingAudioWriter)?
+        let createdMicrophoneWriter: (any RecordingAudioWriter)?
         if configuration.writesStems,
            let systemURL = configuration.systemStemURL,
            let microphoneURL = configuration.microphoneStemURL {
             stemSynchronizer = TimestampedAudioMixer()
-            systemWriter = try AssetWriterSink(
-                url: systemURL,
-                bitRate: configuration.bitRate,
-                failureHandler: onFailure
+            let systemWriter = try writerFactory(
+                systemURL,
+                configuration.bitRate,
+                onFailure
             )
-            microphoneWriter = try AssetWriterSink(
-                url: microphoneURL,
-                bitRate: configuration.bitRate,
-                failureHandler: onFailure
-            )
+            do {
+                createdMicrophoneWriter = try writerFactory(
+                    microphoneURL,
+                    configuration.bitRate,
+                    onFailure
+                )
+                createdSystemWriter = systemWriter
+            } catch {
+                systemWriter.cancel()
+                throw error
+            }
         } else {
             stemSynchronizer = nil
-            systemWriter = nil
-            microphoneWriter = nil
+            createdSystemWriter = nil
+            createdMicrophoneWriter = nil
         }
+
+        // Create the irreplaceable mixed recording only after both disposable stem
+        // writers are ready. If mixed writer creation fails, cancel the empty stems;
+        // capture has not started yet, so no recorded samples can be lost here.
+        do {
+            mixedWriter = try writerFactory(
+                configuration.mixedFileURL,
+                configuration.bitRate,
+                onFailure
+            )
+        } catch {
+            createdSystemWriter?.cancel()
+            createdMicrophoneWriter?.cancel()
+            throw error
+        }
+        systemWriter = createdSystemWriter
+        microphoneWriter = createdMicrophoneWriter
 
         subscriptionIDs.append(
             distributor.subscribe { [weak self] chunk in
@@ -81,7 +137,7 @@ final class RecordingPipeline: @unchecked Sendable {
     }
 
     func accept(_ chunk: CapturedAudioChunk) {
-        levelHandler(chunk.source, Self.meterLevel(for: chunk.samples))
+        levelHandler(chunk.source, AudioLevelMeter.normalizedRMS(samples: chunk.samples))
         distributor.publish(chunk)
     }
 
@@ -89,30 +145,67 @@ final class RecordingPipeline: @unchecked Sendable {
         subscriptionIDs.forEach(distributor.unsubscribe)
         subscriptionIDs.removeAll()
 
-        mixedPathLock.withLock {
-            appendMixed(mixedMixer.finish())
+        var failures: [RecordingPipelineFinalizationError.Failure] = []
+        do {
+            try mixedPathLock.withLock {
+                appendMixed(try mixedMixer.finish())
+            }
+        } catch {
+            failures.append(.init(target: .mixedTimeline, message: error.localizedDescription))
         }
         if let stemSynchronizer {
-            stemPathLock.withLock {
-                appendStems(stemSynchronizer.finish())
+            do {
+                try stemPathLock.withLock {
+                    appendStems(try stemSynchronizer.finish())
+                }
+            } catch {
+                failures.append(.init(target: .stemTimeline, message: error.localizedDescription))
             }
         }
 
-        try await mixedWriter.finish()
-        try await systemWriter?.finish()
-        try await microphoneWriter?.finish()
+        do {
+            try await mixedWriter.finish()
+        } catch {
+            failures.append(.init(target: .mixedWriter, message: error.localizedDescription))
+        }
+        if let systemWriter {
+            do {
+                try await systemWriter.finish()
+            } catch {
+                failures.append(.init(target: .systemWriter, message: error.localizedDescription))
+            }
+        }
+        if let microphoneWriter {
+            do {
+                try await microphoneWriter.finish()
+            } catch {
+                failures.append(.init(target: .microphoneWriter, message: error.localizedDescription))
+            }
+        }
+
+        if !failures.isEmpty {
+            throw RecordingPipelineFinalizationError(failures: failures)
+        }
     }
 
     private func consumeForMixedFile(_ chunk: CapturedAudioChunk) {
-        mixedPathLock.withLock {
-            appendMixed(mixedMixer.append(chunk))
+        do {
+            try mixedPathLock.withLock {
+                appendMixed(try mixedMixer.append(chunk))
+            }
+        } catch {
+            failureHandler(error)
         }
     }
 
     private func consumeForStemFiles(_ chunk: CapturedAudioChunk) {
         guard let stemSynchronizer else { return }
-        stemPathLock.withLock {
-            appendStems(stemSynchronizer.append(chunk))
+        do {
+            try stemPathLock.withLock {
+                appendStems(try stemSynchronizer.append(chunk))
+            }
+        } catch {
+            failureHandler(error)
         }
     }
 
@@ -129,18 +222,4 @@ final class RecordingPipeline: @unchecked Sendable {
         }
     }
 
-    /// Maps RMS amplitude from -60...0 dB onto a UI-friendly 0...1 range.
-    /// Only the scalar level is retained; no audio samples leave the pipeline.
-    private static func meterLevel(for samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        var sumOfSquares: Double = 0
-        for sample in samples {
-            let value = Double(sample)
-            sumOfSquares += value * value
-        }
-        let rms = sqrt(sumOfSquares / Double(samples.count))
-        guard rms.isFinite, rms > 0.001 else { return 0 }
-        let decibels = 20 * log10(rms)
-        return Float(min(1, max(0, (decibels + 60) / 60)))
-    }
 }

@@ -39,14 +39,40 @@ struct SettingsView: View {
                     level: appModel.audioLevels.microphone,
                     color: .green
                 )
-                Text(
-                    appModel.recordingState.isRecording
-                        ? "録音前の分離PCMを表示しています。音声データ自体はUIに保持しません。"
-                        : "録音中にシステム音声とマイクの入力レベルを表示します。"
+                Button(
+                    appModel.isInputMonitoring ? "入力チェックを停止" : "入力チェックを開始"
+                ) {
+                    appModel.toggleInputMonitoring()
+                }
+                .disabled(
+                    appModel.recordingState.isBusy
+                        || appModel.isInputMonitoringTransitioning
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+                if appModel.recordingState.isRecording {
+                    Label(
+                        "録音中の入力レベルです。録音前の分離PCMを表示しています。",
+                        systemImage: "record.circle.fill"
+                    )
+                    .foregroundStyle(.red)
+                } else if appModel.isInputMonitoring {
+                    Label(
+                        "確認中・音声は保存していません",
+                        systemImage: "waveform"
+                    )
+                    .foregroundStyle(.secondary)
+                } else if appModel.isInputMonitoringTransitioning {
+                    Label(
+                        "入力デバイスを準備しています…",
+                        systemImage: "hourglass"
+                    )
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text("録音前にシステム音声とマイクの入力レベルを確認できます。")
+                        .foregroundStyle(.secondary)
+                }
             }
+            .font(.caption)
 
             Section("音声ミックス") {
                 gainControl(
@@ -85,6 +111,9 @@ struct SettingsView: View {
         .padding()
         .frame(width: 560, height: 620)
         .navigationTitle("Sotto 設定")
+        .onDisappear {
+            appModel.stopInputMonitoring()
+        }
         .alert(
             "Sotto",
             isPresented: $appModel.isShowingError,

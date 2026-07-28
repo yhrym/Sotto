@@ -35,6 +35,20 @@ protocol AppTranscriptionServicing: Sendable {
     func retryLastFailure(destinationBookmark: Data?) async throws
 }
 
+protocol AppInputMonitoring: Sendable {
+    typealias LevelHandler = @Sendable (AudioLevelSnapshot) async -> Void
+    typealias StopHandler = @Sendable (Error) async -> Void
+
+    func start(
+        levelHandler: @escaping LevelHandler,
+        stopHandler: @escaping StopHandler
+    ) async throws
+
+    func stop() async
+}
+
+extension SottoInputMonitor: AppInputMonitoring {}
+
 struct RecordingLaunchSettings: Sendable {
     let bitrate: Int
     let microphoneGain: Float
@@ -46,6 +60,7 @@ struct RecordingLaunchSettings: Sendable {
 enum AppServiceUnavailableError: LocalizedError {
     case recording
     case transcription
+    case inputMonitoring
 
     var errorDescription: String? {
         switch self {
@@ -53,6 +68,8 @@ enum AppServiceUnavailableError: LocalizedError {
             "録音サービスがまだ初期化されていません。"
         case .transcription:
             "再実行できる文字起こしジョブがありません。"
+        case .inputMonitoring:
+            "入力チェックサービスがまだ初期化されていません。"
         }
     }
 }
@@ -80,4 +97,15 @@ actor UnavailableTranscriptionService: AppTranscriptionServicing {
     func retryLastFailure(destinationBookmark: Data?) async throws {
         throw AppServiceUnavailableError.transcription
     }
+}
+
+actor UnavailableInputMonitor: AppInputMonitoring {
+    func start(
+        levelHandler: @escaping LevelHandler,
+        stopHandler: @escaping StopHandler
+    ) async throws {
+        throw AppServiceUnavailableError.inputMonitoring
+    }
+
+    func stop() async {}
 }

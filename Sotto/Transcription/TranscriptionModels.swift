@@ -1,7 +1,7 @@
 import Foundation
 
 enum SpeakerLabel: String, Codable, Sendable {
-    case meeting = "会議"
+    case system = "システム"
     case selfSpeaker = "自分"
 }
 
@@ -26,6 +26,17 @@ enum TranscriptionPhase: String, Codable, Sendable {
     }
 }
 
+enum StemCleanupState: String, Codable, Sendable {
+    /// The user explicitly requested that the diagnostic stem files remain.
+    case retained
+    /// Cleanup is durable work that must be retried after interruption.
+    case pending
+    /// Both stem files are absent. A missing file is also considered cleaned.
+    case completed
+    /// The last cleanup attempt failed. The job remains eligible for a later retry.
+    case failed
+}
+
 struct TranscriptionJob: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let recordingStartedAt: Date
@@ -41,6 +52,9 @@ struct TranscriptionJob: Identifiable, Codable, Equatable, Sendable {
     var phase: TranscriptionPhase
     var progress: Double
     var failureReason: String?
+    /// Optional only for decoding manifests written before cleanup tracking existed.
+    var stemCleanupState: StemCleanupState?
+    var stemCleanupFailureReason: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -69,6 +83,8 @@ struct TranscriptionJob: Identifiable, Codable, Equatable, Sendable {
         self.phase = .queued
         self.progress = 0
         self.failureReason = nil
+        self.stemCleanupState = keepTemporaryFiles ? .retained : .pending
+        self.stemCleanupFailureReason = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }
@@ -82,6 +98,7 @@ enum TranscriptionError: LocalizedError, Sendable {
     case missingTemporaryFile(URL)
     case emptyAudioFile(URL)
     case invalidDestinationBookmark
+    case destinationBookmarkMismatch
     case noFinalAnalysisTime(URL)
 
     var errorDescription: String? {
@@ -100,6 +117,8 @@ enum TranscriptionError: LocalizedError, Sendable {
             "文字起こし用一時ファイルに音声がありません: \(url.lastPathComponent)"
         case .invalidDestinationBookmark:
             "保存先フォルダへのアクセス権を復元できませんでした。設定で保存先を選び直してください。"
+        case .destinationBookmarkMismatch:
+            "選択中の保存先は、この文字起こしのMarkdown保存先を含んでいません。元の保存先を選択してください。"
         case .noFinalAnalysisTime(let url):
             "音声を最後まで解析できませんでした: \(url.lastPathComponent)"
         }

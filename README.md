@@ -4,14 +4,15 @@
   <img src="Sotto/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png" width="144" alt="Sotto app icon">
 </p>
 
-macOSのメニューバーから会議を録音し、停止後に日本語で文字起こしするアプリです。
+macOSのメニューバーからシステム音声とマイクを録音し、停止後に日本語で文字起こしするアプリです。
 
 - システム音声とマイクを1つの`.m4a`へ保存
-- 文字起こしは`自分`と`会議`に分けてMarkdownへ出力
+- 録音せずにシステム音声とマイクの入力レベルを確認
+- 文字起こしは`自分`と`システム`に分けてMarkdownへ出力
 - 文字起こし中でも次の録音を開始できる
 - 音声や文字起こし結果を外部へ送らない
 
-録音するときは参加者全員の同意を取ってください。
+他人の音声を録音する場合は、録音前に対象となる全員から明示的な同意を得てください。
 
 ## 環境
 
@@ -39,7 +40,7 @@ Developer IDで署名していないため、初回だけ手順5が必要です�
 
 ## 権限
 
-初回の録音開始時に次の2つを許可します。
+初回の入力チェックまたは録音開始時に次の2つを許可します。
 
 - マイク
 - 画面とシステムオーディオ録音
@@ -66,7 +67,7 @@ Developer IDで署名していないため、初回だけ手順5が必要です�
 └── 2026-07-28_143012.md
 ```
 
-保存先、ビットレート、ログイン時の起動、マイクとシステム音声のゲインなどは設定画面から変更できます。設定画面には入力レベルも表示します。
+保存先、ビットレート、ログイン時の起動、マイクとシステム音声のゲインなどは設定画面から変更できます。`入力チェックを開始`を押すと、録音せずに入力レベルを確認できます。
 
 ## ソースからビルド
 
@@ -111,7 +112,7 @@ Sottoのプロセスはネットワーク通信できません。
 - 文字起こしは`SpeechAnalyzer` / `SpeechTranscriber`のオンデバイス認識だけを使う
 - 外部API、SPMパッケージ、テレメトリ、自動更新を使わない
 
-日本語モデルが未導入の場合、AppleのSpeech frameworkがモデルを準備します。会議音声、文字起こし結果、日時、ファイル名はモデル取得要求へ渡しません。
+日本語モデルが未導入の場合、AppleのSpeech frameworkがモデルを準備します。録音音声、文字起こし結果、日時、ファイル名はモデル取得要求へ渡しません。
 
 ### entitlementを確認
 
@@ -125,6 +126,7 @@ codesign -d --entitlements - /Applications/Sotto.app
 com.apple.security.app-sandbox
 com.apple.security.device.audio-input
 com.apple.security.assets.music.read-write
+com.apple.security.files.bookmarks.app-scope
 com.apple.security.files.user-selected.read-write
 ```
 
@@ -146,7 +148,7 @@ lsof -nP -a -p <PID> -i
 
 何も表示されなければ、Sottoが持つネットワークソケットはありません。継続して見る場合は`nettop -p <PID>`も使えます。
 
-Teams、Google Meet、ブラウザは普通に通信するので、確認するときはSottoのPIDを指定してください。
+ブラウザや通話アプリは普通に通信するので、確認するときはSottoのPIDを指定してください。
 
 ## 困ったとき
 

@@ -35,23 +35,29 @@ final class AppModel: ObservableObject {
     @Published private(set) var permissionSettingsURL: URL?
     @Published private(set) var isLaunchAtLoginEnabled = false
     @Published private(set) var audioLevels = AudioLevelSnapshot()
+    @Published private(set) var isInputMonitoring = false
+    @Published private(set) var isInputMonitoringTransitioning = false
 
     var settings: AppSettings
     let storage: RecordingStorage
 
     private let recordingService: any AppRecordingServicing
     private let transcriptionService: any AppTranscriptionServicing
+    private let inputMonitor: any AppInputMonitoring
     private let loginItemController: LoginItemController
     private let finderController: FinderController
     private var elapsedTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var settingsObservation: AnyCancellable?
+    private var inputMonitoringGeneration: UInt64 = 0
+    private var inputMonitoringTask: Task<Void, Never>?
 
     init(
         settings: AppSettings = AppSettings(),
         storage: RecordingStorage = RecordingStorage(),
         recordingService: any AppRecordingServicing = UnavailableRecordingService(),
         transcriptionService: any AppTranscriptionServicing = UnavailableTranscriptionService(),
+        inputMonitor: any AppInputMonitoring = UnavailableInputMonitor(),
         loginItemController: LoginItemController = LoginItemController(),
         finderController: FinderController = FinderController(),
         initialFailureMessage: String? = nil
@@ -60,6 +66,7 @@ final class AppModel: ObservableObject {
         self.storage = storage
         self.recordingService = recordingService
         self.transcriptionService = transcriptionService
+        self.inputMonitor = inputMonitor
         self.loginItemController = loginItemController
         self.finderController = finderController
         isLaunchAtLoginEnabled = loginItemController.isEnabled
@@ -131,6 +138,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func toggleInputMonitoring() {
+        guard !recordingState.isBusy, !isInputMonitoringTransitioning else {
+            return
+        }
+
+        if isInputMonitoring {
+            stopInputMonitoring()
+        } else {
+            startInputMonitoring()
+        }
+    }
+
+    func stopInputMonitoring() {
+        guard isInputMonitoring || isInputMonitoringTransitioning else {
+            return
+        }
+
+        Task {
+            await stopInputMonitoringAndWait()
+        }
+    }
+
     func chooseSaveFolder() {
         let panel = NSOpenPanel()
         panel.title = "録音の保存先を選択"
@@ -159,7 +188,7 @@ final class AppModel: ObservableObject {
 
     func openSaveFolder() {
         do {
-            try finderController.open(storage.currentFolderURL)
+            try finderController.open(storage.accessibleFolderURL())
         } catch {
             show(error)
         }
@@ -214,6 +243,7 @@ final class AppModel: ObservableObject {
         recordingState = .starting
         Task {
             do {
+                await stopInputMonitoringAndWait()
                 let folder = try storage.recordingFolder(for: Date())
                 try await recordingService.startRecording(
                     in: folder,
@@ -244,6 +274,7 @@ final class AppModel: ObservableObject {
             do {
                 _ = try await recordingService.stopRecording()
                 recordingState = .idle
+                audioLevels = AudioLevelSnapshot()
             } catch {
                 recordingState = .idle
                 audioLevels = AudioLevelSnapshot()
@@ -251,6 +282,83 @@ final class AppModel: ObservableObject {
                 show(error)
             }
         }
+    }
+
+    private func startInputMonitoring() {
+        inputMonitoringGeneration &+= 1
+        let generation = inputMonitoringGeneration
+        isInputMonitoringTransitioning = true
+        audioLevels = AudioLevelSnapshot()
+
+        inputMonitoringTask = Task {
+            do {
+                try await inputMonitor.start(
+                    levelHandler: { [weak self] levels in
+                        await self?.receiveInputMonitorLevels(
+                            levels,
+                            generation: generation
+                        )
+                    },
+                    stopHandler: { [weak self] error in
+                        await self?.inputMonitorDidStop(
+                            with: error,
+                            generation: generation
+                        )
+                    }
+                )
+
+                guard generation == inputMonitoringGeneration,
+                      !recordingState.isBusy else {
+                    await inputMonitor.stop()
+                    return
+                }
+                isInputMonitoring = true
+                isInputMonitoringTransitioning = false
+            } catch {
+                guard generation == inputMonitoringGeneration else {
+                    return
+                }
+                isInputMonitoring = false
+                isInputMonitoringTransitioning = false
+                audioLevels = AudioLevelSnapshot()
+                show(error)
+            }
+        }
+    }
+
+    private func stopInputMonitoringAndWait() async {
+        inputMonitoringTask?.cancel()
+        inputMonitoringTask = nil
+        inputMonitoringGeneration &+= 1
+        isInputMonitoring = false
+        isInputMonitoringTransitioning = false
+        audioLevels = AudioLevelSnapshot()
+        await inputMonitor.stop()
+    }
+
+    private func receiveInputMonitorLevels(
+        _ levels: AudioLevelSnapshot,
+        generation: UInt64
+    ) {
+        guard generation == inputMonitoringGeneration,
+              !recordingState.isBusy else {
+            return
+        }
+        audioLevels = levels
+    }
+
+    private func inputMonitorDidStop(
+        with error: any Error,
+        generation: UInt64
+    ) {
+        guard generation == inputMonitoringGeneration else {
+            return
+        }
+        inputMonitoringGeneration &+= 1
+        isInputMonitoring = false
+        isInputMonitoringTransitioning = false
+        audioLevels = AudioLevelSnapshot()
+        show(error)
     }
 
     private func beginElapsedTimer(startedAt: Date) {

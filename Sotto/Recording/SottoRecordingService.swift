@@ -7,7 +7,9 @@ enum RecordingServiceError: LocalizedError {
     case insufficientDiskSpace(bytes: Int64)
     case cacheDirectoryUnavailable
     case coordinatorFailed(String)
+    case coordinatorFailedAndRecoveryFailed(recording: String, recovery: String)
     case segmentCreationFailed
+    case transcriptionQueueUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -21,9 +23,29 @@ enum RecordingServiceError: LocalizedError {
             "文字起こし用一時ファイルの保存先を作成できませんでした。"
         case let .coordinatorFailed(message):
             "録音を正常に完了できませんでした: \(message)"
+        case let .coordinatorFailedAndRecoveryFailed(recording, recovery):
+            "録音を正常に完了できず、一時音声の回復情報も保存できませんでした。録音: \(recording) 回復情報: \(recovery)"
         case .segmentCreationFailed:
             "分割録音ファイルの保存先を作成できませんでした。"
+        case .transcriptionQueueUnavailable:
+            "文字起こし用一時ファイルの回復情報を保存できないため、録音を開始できません。"
         }
+    }
+}
+
+protocol RecordingCoordinating: Sendable {
+    func setAudioLevelHandler(_ handler: RecordingCoordinator.AudioLevelHandler?) async
+    func start(
+        settings: RecordingCoreSettings,
+        segmentProvider: @escaping RecordingCoordinator.SegmentProvider
+    ) async throws
+    func stop() async
+    func currentState() async -> RecordingState
+}
+
+extension RecordingCoordinator: RecordingCoordinating {
+    func currentState() -> RecordingState {
+        state
     }
 }
 
@@ -35,10 +57,13 @@ actor SottoRecordingService: AppRecordingServicing {
         let destination: RecordingSegmentDestination
     }
 
-    private let coordinator: RecordingCoordinator
+    typealias PermissionRequester = @Sendable () async throws -> Void
+
+    private let coordinator: any RecordingCoordinating
     private let transcriptionQueue: TranscriptionQueue?
     private let fileManager: FileManager
     private let cacheRoot: URL
+    private let permissionRequester: PermissionRequester
     private var segments: [Segment] = []
     private var recordingStartedAt: Date?
     private var launchSettings: RecordingLaunchSettings?
@@ -47,17 +72,30 @@ actor SottoRecordingService: AppRecordingServicing {
 
     init(
         transcriptionQueue: TranscriptionQueue? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        coordinator: any RecordingCoordinating = RecordingCoordinator(),
+        cacheRoot: URL? = nil,
+        permissionRequester: @escaping PermissionRequester = {
+            try await CapturePermissionController.requestRequiredPermissions()
+        }
     ) throws {
         self.transcriptionQueue = transcriptionQueue
         self.fileManager = fileManager
-        coordinator = RecordingCoordinator()
-        guard let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            throw RecordingServiceError.cacheDirectoryUnavailable
+        self.coordinator = coordinator
+        self.permissionRequester = permissionRequester
+        if let cacheRoot {
+            self.cacheRoot = cacheRoot
+        } else {
+            guard let caches = fileManager.urls(
+                for: .cachesDirectory,
+                in: .userDomainMask
+            ).first else {
+                throw RecordingServiceError.cacheDirectoryUnavailable
+            }
+            self.cacheRoot = caches
+                .appending(path: "Sotto", directoryHint: .isDirectory)
+                .appending(path: "Transcription", directoryHint: .isDirectory)
         }
-        cacheRoot = caches
-            .appending(path: "Sotto", directoryHint: .isDirectory)
-            .appending(path: "Transcription", directoryHint: .isDirectory)
     }
 
     func setLevelHandler(_ handler: LevelHandler?) async {
@@ -73,7 +111,10 @@ actor SottoRecordingService: AppRecordingServicing {
         settings: RecordingLaunchSettings
     ) async throws {
         guard !active else { throw RecordingServiceError.alreadyRecording }
-        try await CapturePermissionController.requestRequiredPermissions()
+        guard !settings.transcriptionEnabled || transcriptionQueue != nil else {
+            throw RecordingServiceError.transcriptionQueueUnavailable
+        }
+        try await permissionRequester()
         try verifyDiskSpace(at: folderURL)
 
         let startedAt = Date()
@@ -110,10 +151,16 @@ actor SottoRecordingService: AppRecordingServicing {
                 )
             }
         } catch {
-            active = false
-            segments.removeAll()
-            recordingStartedAt = nil
-            launchSettings = nil
+            let recoveryError = await persistFailedSegments(
+                reason: "録音の開始処理に失敗しました: \(error.localizedDescription)"
+            )
+            clearRecordingContext()
+            if let recoveryError {
+                throw RecordingServiceError.coordinatorFailedAndRecoveryFailed(
+                    recording: error.localizedDescription,
+                    recovery: recoveryError.localizedDescription
+                )
+            }
             throw error
         }
     }
@@ -122,37 +169,85 @@ actor SottoRecordingService: AppRecordingServicing {
         guard active else { return nil }
         active = false
         await coordinator.stop()
-        let finalState = await coordinator.state
-        if case let .failed(message) = finalState {
-            throw RecordingServiceError.coordinatorFailed(message)
-        }
-
+        let finalState = await coordinator.currentState()
         let completedSegments = segments
         let settings = launchSettings
         let start = recordingStartedAt
-        defer {
-            segments.removeAll()
-            recordingStartedAt = nil
-            launchSettings = nil
-            destinationBookmark = nil
+        let bookmark = destinationBookmark
+        defer { clearRecordingContext() }
+
+        let jobs = await makeTranscriptionJobs(
+            segments: completedSegments,
+            settings: settings,
+            start: start,
+            destinationBookmark: bookmark
+        )
+
+        if case let .failed(message) = finalState {
+            if let transcriptionQueue, !jobs.isEmpty {
+                do {
+                    try await transcriptionQueue.recordFailed(
+                        jobs,
+                        reason: "録音ファイルの確定に失敗しました: \(message)"
+                    )
+                } catch {
+                    throw RecordingServiceError.coordinatorFailedAndRecoveryFailed(
+                        recording: message,
+                        recovery: error.localizedDescription
+                    )
+                }
+            }
+            throw RecordingServiceError.coordinatorFailed(message)
         }
 
-        if settings?.transcriptionEnabled == true,
-           let settings,
-           let start,
-           let transcriptionQueue {
-            var segmentStart = start
-            for segment in completedSegments {
-                guard let systemURL = segment.destination.systemStemURL,
-                      let microphoneURL = segment.destination.microphoneStemURL else {
-                    continue
-                }
-                let asset = AVURLAsset(url: segment.destination.mixedFileURL)
-                let duration = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
-                let mixedURL = segment.destination.mixedFileURL
-                let job = TranscriptionJob(
+        if let transcriptionQueue, !jobs.isEmpty {
+            try await transcriptionQueue.enqueue(jobs)
+        }
+        return completedSegments.last?.destination.mixedFileURL
+    }
+
+    private func persistFailedSegments(reason: String) async -> Error? {
+        let jobs = await makeTranscriptionJobs(
+            segments: segments,
+            settings: launchSettings,
+            start: recordingStartedAt,
+            destinationBookmark: destinationBookmark
+        )
+        guard !jobs.isEmpty, let transcriptionQueue else { return nil }
+        do {
+            try await transcriptionQueue.recordFailed(jobs, reason: reason)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private func makeTranscriptionJobs(
+        segments: [Segment],
+        settings: RecordingLaunchSettings?,
+        start: Date?,
+        destinationBookmark: Data?
+    ) async -> [TranscriptionJob] {
+        guard settings?.transcriptionEnabled == true,
+              let settings,
+              let start else {
+            return []
+        }
+        var result: [TranscriptionJob] = []
+        var segmentStart = start
+        for segment in segments {
+            guard let systemURL = segment.destination.systemStemURL,
+                  let microphoneURL = segment.destination.microphoneStemURL else {
+                continue
+            }
+            let mixedURL = segment.destination.mixedFileURL
+            let asset = AVURLAsset(url: mixedURL)
+            let loadedDuration = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
+            let duration = loadedDuration.isFinite ? max(0, loadedDuration) : 0
+            result.append(
+                TranscriptionJob(
                     recordingStartedAt: segmentStart,
-                    duration: max(0, duration),
+                    duration: duration,
                     mixedAudioURL: mixedURL,
                     systemAudioURL: systemURL,
                     microphoneAudioURL: microphoneURL,
@@ -160,11 +255,18 @@ actor SottoRecordingService: AppRecordingServicing {
                     destinationBookmark: destinationBookmark,
                     keepTemporaryFiles: settings.keepTemporaryFiles
                 )
-                try await transcriptionQueue.enqueue(job)
-                segmentStart.addTimeInterval(max(0, duration))
-            }
+            )
+            segmentStart.addTimeInterval(duration)
         }
-        return completedSegments.last?.destination.mixedFileURL
+        return result
+    }
+
+    private func clearRecordingContext() {
+        active = false
+        segments.removeAll()
+        recordingStartedAt = nil
+        launchSettings = nil
+        destinationBookmark = nil
     }
 
     private func makeDestination(

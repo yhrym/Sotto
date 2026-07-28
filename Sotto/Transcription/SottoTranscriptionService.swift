@@ -43,15 +43,22 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
     }
 
     func retryLastFailure(destinationBookmark: Data?) async throws {
-        guard let failed = jobs
+        if let failed = jobs
             .filter({ $0.phase == .failed })
-            .max(by: { $0.updatedAt < $1.updatedAt }) else {
-            throw AppServiceUnavailableError.transcription
+            .max(by: { $0.updatedAt < $1.updatedAt }) {
+            try await queue.retry(
+                jobID: failed.id,
+                destinationBookmark: destinationBookmark
+            )
+            return
         }
-        try await queue.retry(
-            jobID: failed.id,
-            destinationBookmark: destinationBookmark
-        )
+        if let cleanupFailure = jobs
+            .filter({ $0.stemCleanupState == .failed })
+            .max(by: { $0.updatedAt < $1.updatedAt }) {
+            try await queue.retryStemCleanup(jobID: cleanupFailure.id)
+            return
+        }
+        throw AppServiceUnavailableError.transcription
     }
 
     private func receive(_ jobs: [TranscriptionJob]) async {
@@ -90,9 +97,15 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
             .filter { !$0.phase.isTerminal }
             .min(by: { $0.createdAt < $1.createdAt })
         let failure = jobs
-            .filter { $0.phase == .failed }
-            .max(by: { $0.updatedAt < $1.updatedAt })?
-            .failureReason
+            .filter {
+                $0.phase == .failed || $0.stemCleanupState == .failed
+            }
+            .max(by: { $0.updatedAt < $1.updatedAt })
+            .flatMap { job in
+                job.phase == .failed
+                    ? job.failureReason
+                    : job.stemCleanupFailureReason
+            }
 
         if let active {
             await statusHandler?(
@@ -128,7 +141,7 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
         case .waitingForModel:
             "日本語モデルを準備中…"
         case .transcribingSystem:
-            "会議音声を文字起こし中…"
+            "システム音声を文字起こし中…"
         case .transcribingMicrophone:
             "マイク音声を文字起こし中…"
         case .merging:

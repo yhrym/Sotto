@@ -15,7 +15,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate version
         run: |
@@ -35,6 +37,18 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match app version $version."
             exit 1
           fi
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Sotto.xcodeproj \
+            -scheme Sotto \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/SottoReleaseTestDerivedData" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=YES
 
       - name: Build Universal app
         run: |
@@ -58,11 +72,29 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$app"
           lipo "$app/Contents/MacOS/Sotto" -verify_arch arm64 x86_64
-          codesign -d --entitlements - "$app" > "$entitlements"
+          codesign -d --xml --entitlements - "$app" > "$entitlements"
 
-          grep -q 'com.apple.security.app-sandbox' "$entitlements"
-          if grep -q 'com.apple.security.network.client' "$entitlements"; then
-            echo "Unexpected network.client entitlement."
+          expected_entitlements="$(
+            printf '%s\n' \
+              'com.apple.security.app-sandbox=true' \
+              'com.apple.security.assets.music.read-write=true' \
+              'com.apple.security.device.audio-input=true' \
+              'com.apple.security.files.bookmarks.app-scope=true' \
+              'com.apple.security.files.user-selected.read-write=true' |
+              sort
+          )"
+          actual_entitlements="$(
+            plutil -p "$entitlements" |
+              sed -nE 's/^  "([^"]+)" => (true|false)$/\1=\2/p' |
+              sort
+          )"
+
+          if [[ "$actual_entitlements" != "$expected_entitlements" ]]; then
+            echo "Unexpected entitlement set."
+            echo "Expected:"
+            echo "$expected_entitlements"
+            echo "Actual:"
+            echo "$actual_entitlements"
             exit 1
           fi
 

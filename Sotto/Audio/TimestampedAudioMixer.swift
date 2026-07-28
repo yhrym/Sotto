@@ -1,6 +1,17 @@
 import CoreMedia
 import Foundation
 
+enum TimestampedAudioMixerError: LocalizedError, Equatable, Sendable {
+    case batchDurationExceeded(actual: TimeInterval, maximum: TimeInterval)
+
+    var errorDescription: String? {
+        switch self {
+        case let .batchDurationExceeded(actual, maximum):
+            "音声タイムラインが不連続です（未処理 \(actual.formatted(.number.precision(.fractionLength(2)))) 秒、上限 \(maximum.formatted(.number.precision(.fractionLength(2)))) 秒）。ファイルを安全に分割します。"
+        }
+    }
+}
+
 /// Aligns two normalized streams by PTS. A bounded lateness window permits modest
 /// callback jitter; once it expires, a missing source is rendered as silence.
 final class TimestampedAudioMixer: @unchecked Sendable {
@@ -11,6 +22,9 @@ final class TimestampedAudioMixer: @unchecked Sendable {
         var microphoneGain: Float = 0.7
         var blockFrameCount: Int = 1_024
         var maximumLateness: TimeInterval = 0.100
+        /// Bounds the number of PCM frames materialized by one callback. A larger
+        /// discontinuity is treated as a route-change failure and triggers rollover.
+        var maximumBatchDuration: TimeInterval = 2
     }
 
     private let lock = NSLock()
@@ -24,19 +38,27 @@ final class TimestampedAudioMixer: @unchecked Sendable {
         precondition(configuration.sampleRate > 0)
         precondition(configuration.channelCount > 0)
         precondition(configuration.blockFrameCount > 0)
+        precondition(configuration.maximumBatchDuration > 0)
         self.configuration = configuration
         systemBuffer = TimelineRingBuffer(channelCount: configuration.channelCount)
         microphoneBuffer = TimelineRingBuffer(channelCount: configuration.channelCount)
     }
 
-    func append(_ chunk: CapturedAudioChunk) -> [SynchronizedAudioBlock] {
-        lock.withLock {
+    func append(_ chunk: CapturedAudioChunk) throws -> [SynchronizedAudioBlock] {
+        try lock.withLock {
             guard chunk.sampleRate == configuration.sampleRate,
                   chunk.channelCount == configuration.channelCount,
                   chunk.frameCount > 0 else {
                 return []
             }
 
+            // Roll back the prospective chunk when it would create an unsafe
+            // discontinuity. The coordinator can then finalize the contiguous prefix
+            // and restart in a new file instead of re-encountering the same error.
+            let previousSystemBuffer = systemBuffer
+            let previousMicrophoneBuffer = microphoneBuffer
+            let previousCursor = cursor
+            let previousOriginFrame = originFrame
             let startFrame = Self.framePosition(
                 for: chunk.presentationTimeStamp,
                 sampleRate: configuration.sampleRate
@@ -58,18 +80,26 @@ final class TimestampedAudioMixer: @unchecked Sendable {
             if cursor == nil, readyToBegin {
                 cursor = earliestFrame
             }
-            return drain(completeFinalBlock: false)
+            do {
+                return try drain(completeFinalBlock: false)
+            } catch {
+                systemBuffer = previousSystemBuffer
+                microphoneBuffer = previousMicrophoneBuffer
+                cursor = previousCursor
+                originFrame = previousOriginFrame
+                throw error
+            }
         }
     }
 
     /// Flushes all received audio through the latest PTS, padding both streams with
     /// silence where needed. Call only after capture outputs have stopped.
-    func finish() -> [SynchronizedAudioBlock] {
-        lock.withLock {
+    func finish() throws -> [SynchronizedAudioBlock] {
+        try lock.withLock {
             if cursor == nil {
                 cursor = earliestFrame
             }
-            return drain(completeFinalBlock: true)
+            return try drain(completeFinalBlock: true)
         }
     }
 
@@ -119,12 +149,24 @@ final class TimestampedAudioMixer: @unchecked Sendable {
         return latestFrame - latenessFrames
     }
 
-    private func drain(completeFinalBlock: Bool) -> [SynchronizedAudioBlock] {
+    private func drain(completeFinalBlock: Bool) throws -> [SynchronizedAudioBlock] {
         guard var outputCursor = cursor,
               let originFrame,
               let safeEnd = safeEndFrame(finalizing: completeFinalBlock),
               safeEnd > outputCursor else {
             return []
+        }
+
+        let pendingFrameCount = safeEnd - outputCursor
+        let maximumBatchFrameCount = max(
+            Int64(configuration.blockFrameCount),
+            Int64((configuration.maximumBatchDuration * configuration.sampleRate).rounded(.up))
+        )
+        guard pendingFrameCount <= maximumBatchFrameCount else {
+            throw TimestampedAudioMixerError.batchDurationExceeded(
+                actual: Double(pendingFrameCount) / configuration.sampleRate,
+                maximum: configuration.maximumBatchDuration
+            )
         }
 
         var blocks: [SynchronizedAudioBlock] = []
