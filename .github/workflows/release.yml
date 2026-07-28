@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate version
+        run: |
+          set -euo pipefail
+          version="$(awk '
+            /MARKETING_VERSION =/ {
+              gsub(/;/, "", $3)
+              print $3
+              exit
+            }
+          ' Sotto.xcodeproj/project.pbxproj)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read MARKETING_VERSION."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match app version $version."
+            exit 1
+          fi
+
+      - name: Build Universal app
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Sotto.xcodeproj \
+            -scheme Sotto \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/SottoReleaseDerivedData" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=YES \
+            ONLY_ACTIVE_ARCH=NO \
+            'ARCHS=arm64 x86_64'
+
+      - name: Verify app
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/SottoReleaseDerivedData/Build/Products/Release/Sotto.app"
+          entitlements="$RUNNER_TEMP/Sotto.entitlements.txt"
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo "$app/Contents/MacOS/Sotto" -verify_arch arm64 x86_64
+          codesign -d --entitlements - "$app" > "$entitlements"
+
+          grep -q 'com.apple.security.app-sandbox' "$entitlements"
+          if grep -q 'com.apple.security.network.client' "$entitlements"; then
+            echo "Unexpected network.client entitlement."
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/SottoReleaseDerivedData/Build/Products/Release/Sotto.app"
+
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/Sotto-local.zip
+          (
+            cd dist
+            shasum -a 256 Sotto-local.zip > Sotto-local.zip.sha256
+          )
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/Sotto-local.zip \
+            dist/Sotto-local.zip.sha256 \
+            --verify-tag \
+            --title "Sotto ${GITHUB_REF_NAME#v}" \
+            --generate-notes
