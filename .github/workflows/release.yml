@@ -48,7 +48,8 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/SottoReleaseTestDerivedData" \
             CODE_SIGN_IDENTITY=- \
-            CODE_SIGNING_REQUIRED=YES
+            CODE_SIGNING_REQUIRED=YES \
+            ENABLE_TESTABILITY=YES
 
       - name: Build Universal app
         run: |
