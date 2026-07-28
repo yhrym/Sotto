@@ -7,11 +7,11 @@ Sotto は、macOS のメニューバーから会議のシステム音声とマ�
 ## 動作要件
 
 - macOS 26.0 以上
-- Xcode 26.x
+- Xcode 26.x（ソースからビルドする場合のみ）
 - 日本語をオンデバイス認識できる Mac
 - 画面とシステムオーディオ録音、およびマイクの許可
 
-Developer ID 証明書、公証、配布用署名は使用しません。利用する各 Mac でソースから `Sign to Run Locally` ビルドする方法を推奨します。GitHub Releasesから、ad-hoc署名したRelease版をダウンロードすることもできます。
+Developer ID 証明書、公証、配布用署名は使用しません。通常はGitHub ReleasesのZIP版を利用してください。ソースから `Sign to Run Locally` でビルドすることもできます。
 
 ## ZIP版をダウンロードして使う
 
@@ -32,22 +32,13 @@ shasum -a 256 -c Sotto-local.zip.sha256
 
 ZIP版はDeveloper ID署名・公証を行っていないため、初回だけ手順5が必要です。管理対象のMacで「このまま開く」が禁止されている場合は、ソースからローカルビルドするか管理者へ依頼してください。
 
-## ほかの Mac へ導入する
+詳しい画面操作はApple公式の「[Macで提供元が不明なアプリを開く](https://support.apple.com/ja-jp/guide/mac-help/mh40616/mac)」を参照してください。
 
-Developer ID 署名と公証を行わない場合も、次の2通りで別のMacへ導入できます。
+## ソースからビルドする
 
-1. 推奨: ソース一式を渡し、利用するMacごとに `Sign to Run Locally` ビルドする。
-2. 簡便: ad-hoc署名したRelease版をZIPで渡し、受け手がmacOSの「このまま開く」で明示的に許可する。
+ZIP版を使わず、自分でビルドする場合の手順です。Apple Developer Programへの登録は必要ありません。
 
-`Sign to Run Locally` は完全な未署名ではなく、署名情報とentitlementをappへ埋め込むad-hoc署名です。ただし、Appleが発行するDeveloper IDによる身元確認と公証はありません。そのためビルド済みappを別のMacへ渡す方法では、初回起動時にGatekeeperが未確認の開発元として停止します。
-
-Apple Developer Programへの有料登録は、警告なしで一般配布するDeveloper ID署名と公証には必要ですが、上記2つの手順には必要ありません。
-
-### 方法A: 各Macでローカルビルドする（推奨）
-
-導入する Mac ごとに、以下を実行します。
-
-### 1. Xcodeを準備する
+### Xcodeを準備する
 
 1. macOS 26.0 以上へ更新します。
 2. App Store または Apple Developer から Xcode 26.x をインストールします。
@@ -64,7 +55,7 @@ xcodebuild -version
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
-### 2-A. Xcodeの画面からビルドする
+### Xcodeの画面からビルドする
 
 1. ソース一式を任意のフォルダへコピーします。
 2. `Sotto.xcodeproj` を Xcode で開きます。
@@ -79,7 +70,7 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
 ビルド後、Xcode の左側にある Products の `Sotto.app` を右クリックし、`Show in Finder` を選びます。表示された `Sotto.app` を `/Applications` へコピーします。同名の旧版がある場合は、Sottoを終了して旧版をゴミ箱へ移してからコピーしてください。
 
-### 2-B. Terminalからビルドする
+### Terminalからビルドする
 
 Terminal でソースのルート、つまり `Sotto.xcodeproj` と `README.md` があるフォルダへ移動して実行します。`CODE_SIGN_IDENTITY=-` が `Sign to Run Locally` の ad-hoc signing を指定します。
 
@@ -118,7 +109,7 @@ codesign -d --entitlements - /Applications/Sotto.app
 
 最初のコマンドで `valid on disk` が表示され、2番目の出力に `com.apple.security.app-sandbox` があり、`com.apple.security.network.client` がないことを確認してください。
 
-### 3. 起動する
+### 起動する
 
 FinderのApplicationsからSottoを開くか、Terminalで次を実行します。
 
@@ -126,18 +117,9 @@ FinderのApplicationsからSottoを開くか、Terminalで次を実行します�
 open /Applications/Sotto.app
 ```
 
-SottoはDockではなくメニューバーに波形アイコンを表示します。初回実行時や再ビルド後、macOSが権限の再確認を求める場合があります。
+SottoはDockではなくメニューバーに波形アイコンを表示します。初回実行時や再ビルド後、macOSが権限の再確認を求める場合があります。続けて「初回起動と権限」の手順を実施してください。
 
-### 4. 権限を許可する
-
-1. メニューバーのSottoを開き、録音開始を押します。
-2. マイクの確認ダイアログを許可します。
-3. `システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオ録音` でSottoをONにします。
-4. 一覧にSottoがない場合は `+` を押し、ファイル選択画面で `⌘ShiftG` を押します。
-5. `/Applications/` と入力して移動し、`Sotto.app` を選択します。
-6. 権限変更後はSottoを終了し、もう一度起動します。
-
-### 5. 導入確認
+### 動作確認
 
 1. YouTubeなどで音声を再生します。
 2. Sottoの設定画面を開きます。
@@ -151,78 +133,6 @@ SottoはDockではなくメニューバーに波形アイコンを表示しま�
 ### 更新する場合
 
 新しいソースへ差し替えた後、同じ手順で再ビルドします。実行中のSottoを終了し、`/Applications/Sotto.app` を置き換えて起動してください。`Sign to Run Locally` はビルドごとに署名が変わり得るため、macOSから求められた場合は画面とシステムオーディオ録音、マイクの許可をやり直します。
-
-### 方法B: ビルド済みRelease版を利用する
-
-この方法は、Xcodeをインストールせずに利用したい場合に使えます。Developer ID署名・公証済みアプリと同じ起動体験にはなりません。GitHub ReleaseからZIPと検証用ハッシュをダウンロードし、ハッシュを照合してからGatekeeperの例外を許可してください。
-
-#### 渡す側: Releaseビルド
-
-ソースのルートで実行します。
-
-```bash
-xcodebuild \
-  -project Sotto.xcodeproj \
-  -scheme Sotto \
-  -configuration Release \
-  -destination 'generic/platform=macOS' \
-  -derivedDataPath "$PWD/.build/ReleaseDerivedData" \
-  CODE_SIGN_IDENTITY=- \
-  CODE_SIGNING_REQUIRED=YES \
-  ONLY_ACTIVE_ARCH=NO \
-  ARCHS='arm64 x86_64' \
-  build
-```
-
-このコマンドはApple SiliconとIntelの両方を含むUniversal Binaryを生成します。実行に必要なmacOSは26.0以上です。
-
-署名とentitlementを確認します。
-
-```bash
-codesign --verify --deep --strict --verbose=2 \
-  .build/ReleaseDerivedData/Build/Products/Release/Sotto.app
-
-codesign -d --entitlements - \
-  .build/ReleaseDerivedData/Build/Products/Release/Sotto.app
-```
-
-App Sandboxがあり、network clientがないことを確認してからZIPを作ります。Finderの通常の圧縮より、bundleと拡張属性を保持する `ditto` を使用します。
-
-```bash
-ditto -c -k --sequesterRsrc --keepParent \
-  .build/ReleaseDerivedData/Build/Products/Release/Sotto.app \
-  Sotto-local.zip
-
-shasum -a 256 Sotto-local.zip
-```
-
-表示されたSHA-256値を、ZIPとは別の経路で利用者へ伝えてください。
-
-#### 受け取る側: ハッシュ確認と配置
-
-受け取ったZIPがDownloadsにある場合の例です。`期待するSHA-256値` は渡す側から別経路で受け取った値に置き換えます。
-
-```bash
-cd ~/Downloads
-shasum -a 256 Sotto-local.zip
-```
-
-値が一致しない場合は開かず、ZIPを破棄して渡す側へ確認してください。一致したらFinderでZIPを展開し、`Sotto.app` をApplicationsへ移動します。
-
-#### 受け取る側: Gatekeeperで初回起動を許可
-
-1. `/Applications/Sotto.app` をダブルクリックし、一度起動を試みます。
-2. 未確認の開発元、またはAppleが悪質なソフトウェアを確認できない旨の警告が出たら、ダイアログを閉じます。
-3. `システム設定 > プライバシーとセキュリティ` を開きます。
-4. セキュリティ欄に表示されるSottoの「このまま開く」を押します。このボタンは起動を試みた後、およそ1時間表示されます。
-5. ログインパスワードを入力し、もう一度「開く」を確認します。
-6. 起動後、「初回起動と権限」の手順に従って画面とシステムオーディオ録音、マイクを許可します。
-
-macOSはこの選択をSottoの例外として保存するため、同じビルドは次回から通常どおり起動できます。管理対象のMacでは「このまま開く」がポリシーで禁止されていることがあります。その場合は回避コマンドを使わず、方法Aでローカルビルドするか、管理者へ許可を依頼してください。
-
-`xattr` でquarantine属性を削除する手順は掲載しません。Gatekeeperを無条件に回避するのではなく、macOSの画面で対象appを確認して例外登録するためです。
-
-詳しい画面操作はApple公式の「[Macで提供元が不明なアプリを開く](https://support.apple.com/ja-jp/guide/mac-help/mh40616/mac)」も参照してください。
 
 ## 初回起動と権限
 
