@@ -1,7 +1,7 @@
 # Sotto
 
 <p align="center">
-  <img src="Sotto/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png" width="144" alt="Sotto app icon">
+  <img src=".github/assets/sotto-icon.png" width="144" alt="Sotto app icon">
 </p>
 
 macOSのメニューバーからシステム音声とマイクを録音し、停止後に日本語で文字起こしするアプリです。
