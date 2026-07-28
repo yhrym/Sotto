@@ -1,0 +1,54 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+*.xcscmblueprint
+*.xccheckout
+*.xcresult
+
+# Editor user-specific data
+.idea/
+.vscode/
+*.swp
+
+# Build products
+.build/
+DerivedData/
+build/
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+*.pkg
+*.zip
+!Resources/**/*.zip
+
+# Locally packaged applications
+*.app
+
+# Local recordings and transcription scratch/output
+*.m4a
+*.caf
+*.wav
+*.mp3
+Recordings/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.cer
+*.key
+*.mobileprovision
+*.provisionprofile
+Secrets.xcconfig
+Local.xcconfig
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
