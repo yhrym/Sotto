@@ -2,9 +2,9 @@
 
 ## 1. 目的と前提
 
-Sotto は、参加者全員の同意を得た社内会議を録音する macOS メニューバーアプリである。Teams、Google Meet などの特定アプリには依存せず、ScreenCaptureKit でシステム全体の音声とマイク音声を取得する。録音停止後、Speech framework のオンデバイス認識だけを使って日本語文字起こしを行う。
+Sotto は、参加者全員の同意を得た会議を録音する macOS メニューバーアプリである。Teams、Google Meet などの特定アプリには依存せず、ScreenCaptureKit でシステム全体の音声とマイク音声を取得する。録音停止後、Speech framework のオンデバイス認識だけを使って日本語文字起こしを行う。
 
-本アプリは開発者自身の Mac 上でのみ使用する。Developer ID による配布、公証、自動更新は行わず、Xcode の `Sign to Run Locally`（ad-hoc signing）で実行する。
+Developer ID による署名、公証、自動更新は行わない。ソースからXcodeの `Sign to Run Locally` でビルドするか、GitHub Releasesで公開するad-hoc署名済みバイナリを利用する。
 
 最優先の安全要件は、音声、文字起こし結果、および会議メタデータをネットワークへ送らないことである。App Sandbox を有効にし、`com.apple.security.network.client` と `com.apple.security.network.server` は付与しない。外部ライブラリ、分析、テレメトリ、クラッシュレポート、自動更新、外部 API は組み込まない。
 
