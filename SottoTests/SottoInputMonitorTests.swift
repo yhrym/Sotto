@@ -4,12 +4,34 @@ import XCTest
 @testable import Sotto
 
 final class SottoInputMonitorTests: XCTestCase {
+    func testPassesSelectedMicrophoneToCaptureSession() async throws {
+        let session = FakeAudioCaptureSession()
+        let selectedDevice = MicrophoneIDCollector()
+        let monitor = SottoInputMonitor(
+            sessionFactory: { microphoneDeviceID, audioHandler, stopHandler in
+                selectedDevice.store(microphoneDeviceID)
+                session.configure(audioHandler: audioHandler, stopHandler: stopHandler)
+                return session
+            },
+            permissionRequester: {}
+        )
+
+        try await monitor.start(
+            microphoneDeviceID: "built-in-microphone",
+            levelHandler: { _ in },
+            stopHandler: { _ in }
+        )
+
+        XCTAssertEqual(selectedDevice.value, "built-in-microphone")
+        await monitor.stop()
+    }
+
     func testStopDuringPermissionWaitPreventsGhostCapture() async throws {
         let session = FakeAudioCaptureSession()
         let permissionGate = PermissionGate()
         let levels = LevelCollector()
         let monitor = SottoInputMonitor(
-            sessionFactory: { audioHandler, stopHandler in
+            sessionFactory: { _, audioHandler, stopHandler in
                 session.configure(audioHandler: audioHandler, stopHandler: stopHandler)
                 return session
             },
@@ -20,6 +42,7 @@ final class SottoInputMonitorTests: XCTestCase {
 
         let startTask = Task {
             try await monitor.start(
+                microphoneDeviceID: nil,
                 levelHandler: { snapshot in
                     await levels.append(snapshot)
                 },
@@ -42,7 +65,7 @@ final class SottoInputMonitorTests: XCTestCase {
         let session = FakeAudioCaptureSession()
         let collector = LevelCollector()
         let monitor = SottoInputMonitor(
-            sessionFactory: { audioHandler, stopHandler in
+            sessionFactory: { _, audioHandler, stopHandler in
                 session.configure(audioHandler: audioHandler, stopHandler: stopHandler)
                 return session
             },
@@ -50,6 +73,7 @@ final class SottoInputMonitorTests: XCTestCase {
         )
 
         try await monitor.start(
+            microphoneDeviceID: nil,
             levelHandler: { snapshot in
                 await collector.append(snapshot)
             },
@@ -93,13 +117,14 @@ final class SottoInputMonitorTests: XCTestCase {
         let levels = LevelCollector()
         let failures = FailureCollector()
         let monitor = SottoInputMonitor(
-            sessionFactory: { audioHandler, stopHandler in
+            sessionFactory: { _, audioHandler, stopHandler in
                 session.configure(audioHandler: audioHandler, stopHandler: stopHandler)
                 return session
             },
             permissionRequester: {}
         )
         try await monitor.start(
+            microphoneDeviceID: nil,
             levelHandler: { snapshot in
                 await levels.append(snapshot)
             },
@@ -123,7 +148,7 @@ final class SottoInputMonitorTests: XCTestCase {
     func testStopWaitsForCaptureStartBeforeReturning() async throws {
         let session = SuspendedStartAudioCaptureSession()
         let monitor = SottoInputMonitor(
-            sessionFactory: { audioHandler, stopHandler in
+            sessionFactory: { _, audioHandler, stopHandler in
                 session.configure(audioHandler: audioHandler, stopHandler: stopHandler)
                 return session
             },
@@ -132,6 +157,7 @@ final class SottoInputMonitorTests: XCTestCase {
 
         let startTask = Task {
             try await monitor.start(
+                microphoneDeviceID: nil,
                 levelHandler: { _ in },
                 stopHandler: { _ in }
             )
@@ -319,5 +345,20 @@ private actor PermissionGate {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private final class MicrophoneIDCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: String?
+
+    var value: String? {
+        lock.withLock { storedValue }
+    }
+
+    func store(_ value: String?) {
+        lock.withLock {
+            storedValue = value
+        }
     }
 }

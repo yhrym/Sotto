@@ -13,6 +13,7 @@ actor SottoInputMonitor {
     typealias LevelHandler = @Sendable (AudioLevelSnapshot) async -> Void
     typealias StopHandler = @Sendable (Error) async -> Void
     typealias SessionFactory = @Sendable (
+        String?,
         @escaping ScreenCaptureSession.AudioHandler,
         @escaping ScreenCaptureSession.StopHandler
     ) throws -> any AudioCaptureSession
@@ -38,8 +39,12 @@ actor SottoInputMonitor {
     private var startCompletionWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
-        sessionFactory: @escaping SessionFactory = { audioHandler, stopHandler in
-            try ScreenCaptureSession(audioHandler: audioHandler, stopHandler: stopHandler)
+        sessionFactory: @escaping SessionFactory = { microphoneDeviceID, audioHandler, stopHandler in
+            try ScreenCaptureSession(
+                microphoneDeviceID: microphoneDeviceID,
+                audioHandler: audioHandler,
+                stopHandler: stopHandler
+            )
         },
         permissionRequester: @escaping PermissionRequester = {
             try await CapturePermissionController.requestRequiredPermissions()
@@ -50,6 +55,7 @@ actor SottoInputMonitor {
     }
 
     func start(
+        microphoneDeviceID: String?,
         levelHandler: @escaping LevelHandler,
         stopHandler: @escaping StopHandler
     ) async throws {
@@ -77,6 +83,7 @@ actor SottoInputMonitor {
         let createdSession: any AudioCaptureSession
         do {
             createdSession = try sessionFactory(
+                microphoneDeviceID,
                 { [weak self] chunk in
                     Task {
                         await self?.receive(chunk, generation: currentGeneration)

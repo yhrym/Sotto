@@ -45,6 +45,23 @@ final class AppModelInputMonitoringTests: XCTestCase {
         XCTAssertEqual(model.audioLevels, AudioLevelSnapshot())
     }
 
+    func testInputMonitoringUsesSelectedMicrophone() async throws {
+        let suiteName = "AppModelInputMonitoringTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(defaults: defaults)
+        settings.microphoneDeviceID = "selected-microphone"
+        let monitor = InputMonitorSpy()
+        let model = AppModel(settings: settings, inputMonitor: monitor)
+
+        model.toggleInputMonitoring()
+        try await waitUntil { model.isInputMonitoring }
+
+        let capturedDeviceID = await monitor.microphoneDeviceID
+        XCTAssertEqual(capturedDeviceID, "selected-microphone")
+        model.stopInputMonitoring()
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         condition: @escaping @MainActor () async -> Bool
@@ -64,12 +81,15 @@ final class AppModelInputMonitoringTests: XCTestCase {
 private actor InputMonitorSpy: AppInputMonitoring {
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var microphoneDeviceID: String?
 
     func start(
+        microphoneDeviceID: String?,
         levelHandler: @escaping LevelHandler,
         stopHandler: @escaping StopHandler
     ) async throws {
         startCount += 1
+        self.microphoneDeviceID = microphoneDeviceID
         await levelHandler(AudioLevelSnapshot(system: 0.25, microphone: 0.75))
     }
 
@@ -84,6 +104,7 @@ private actor SuspendedInputMonitorSpy: AppInputMonitoring {
     private var startContinuation: CheckedContinuation<Void, Never>?
 
     func start(
+        microphoneDeviceID: String?,
         levelHandler: @escaping LevelHandler,
         stopHandler: @escaping StopHandler
     ) async throws {

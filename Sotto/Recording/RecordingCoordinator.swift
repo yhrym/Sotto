@@ -131,6 +131,7 @@ actor RecordingCoordinator {
         self.pipeline = pipeline
 
         let session = try ScreenCaptureSession(
+            microphoneDeviceID: settings.microphoneDeviceID,
             audioHandler: { [weak pipeline] chunk in
                 pipeline?.accept(chunk)
             },

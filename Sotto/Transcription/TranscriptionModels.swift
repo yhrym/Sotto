@@ -52,6 +52,7 @@ struct TranscriptionJob: Identifiable, Codable, Equatable, Sendable {
     var phase: TranscriptionPhase
     var progress: Double
     var failureReason: String?
+    var failureDismissed: Bool?
     /// Optional only for decoding manifests written before cleanup tracking existed.
     var stemCleanupState: StemCleanupState?
     var stemCleanupFailureReason: String?
@@ -83,6 +84,7 @@ struct TranscriptionJob: Identifiable, Codable, Equatable, Sendable {
         self.phase = .queued
         self.progress = 0
         self.failureReason = nil
+        self.failureDismissed = nil
         self.stemCleanupState = keepTemporaryFiles ? .retained : .pending
         self.stemCleanupFailureReason = nil
         self.createdAt = Date()

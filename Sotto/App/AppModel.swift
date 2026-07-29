@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var audioLevels = AudioLevelSnapshot()
     @Published private(set) var isInputMonitoring = false
     @Published private(set) var isInputMonitoringTransitioning = false
+    @Published private(set) var availableMicrophones: [MicrophoneDevice] = []
 
     var settings: AppSettings
     let storage: RecordingStorage
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
         isLaunchAtLoginEnabled = loginItemController.isEnabled
         lastFailureMessage = initialFailureMessage
         isShowingError = initialFailureMessage != nil
+        refreshMicrophones()
 
         Task { [weak self, recordingService, transcriptionService] in
             await recordingService.setLevelHandler { [weak self] levels in
@@ -124,6 +126,27 @@ final class AppModel: ObservableObject {
 
     var saveFolderDisplayPath: String {
         storage.currentFolderURL.path(percentEncoded: false)
+    }
+
+    var selectedMicrophoneDeviceID: String? {
+        settings.microphoneDeviceID.isEmpty ? nil : settings.microphoneDeviceID
+    }
+
+    var microphoneChoices: [MicrophoneDevice] {
+        guard !settings.microphoneDeviceID.isEmpty,
+              !availableMicrophones.contains(where: { $0.id == settings.microphoneDeviceID }) else {
+            return availableMicrophones
+        }
+        return availableMicrophones + [
+            MicrophoneDevice(
+                id: settings.microphoneDeviceID,
+                name: "選択したマイク（未接続）"
+            )
+        ]
+    }
+
+    func refreshMicrophones() {
+        availableMicrophones = MicrophoneDevice.connected()
     }
 
     func toggleRecording() {
@@ -228,6 +251,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func dismissLastFailedTranscription() {
+        Task {
+            do {
+                try await transcriptionService.dismissLastFailure()
+                lastFailureMessage = nil
+            } catch {
+                show(error)
+            }
+        }
+    }
+
     func dismissError() {
         isShowingError = false
         permissionSettingsURL = nil
@@ -251,6 +285,7 @@ final class AppModel: ObservableObject {
                         bitrate: settings.bitrate.rawValue,
                         microphoneGain: Float(settings.microphoneGain),
                         systemGain: Float(settings.systemGain),
+                        microphoneDeviceID: selectedMicrophoneDeviceID,
                         transcriptionEnabled: settings.transcriptionEnabled,
                         keepTemporaryFiles: settings.keepTemporaryFiles
                     )
@@ -293,6 +328,7 @@ final class AppModel: ObservableObject {
         inputMonitoringTask = Task {
             do {
                 try await inputMonitor.start(
+                    microphoneDeviceID: selectedMicrophoneDeviceID,
                     levelHandler: { [weak self] levels in
                         await self?.receiveInputMonitorLevels(
                             levels,

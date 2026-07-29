@@ -30,5 +30,6 @@ struct RecordingCoreSettings: Sendable {
     var bitRate: Int = 128_000
     var systemGain: Float = 0.7
     var microphoneGain: Float = 0.7
+    var microphoneDeviceID: String?
     var transcriptionEnabled = true
 }

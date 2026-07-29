@@ -20,6 +20,10 @@ struct SpeechFileTranscriber: Sendable {
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
             throw TranscriptionError.missingTemporaryFile(audioURL)
         }
+        let values = try audioURL.resourceValues(forKeys: [.fileSizeKey])
+        guard let fileSize = values.fileSize, fileSize > 0 else {
+            throw TranscriptionError.emptyAudioFile(audioURL)
+        }
 
         let audioFile = try AVAudioFile(forReading: audioURL)
         guard audioFile.length > 0, audioFile.processingFormat.sampleRate > 0 else {

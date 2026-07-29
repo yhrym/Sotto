@@ -73,6 +73,7 @@ actor TranscriptionQueue {
                 failed.phase = .failed
                 failed.progress = 0
                 failed.failureReason = reason
+                failed.failureDismissed = false
                 failed.updatedAt = now
                 return failed
             }
@@ -97,9 +98,21 @@ actor TranscriptionQueue {
         jobs[index].phase = .queued
         jobs[index].progress = 0
         jobs[index].failureReason = nil
+        jobs[index].failureDismissed = nil
         jobs[index].updatedAt = Date()
         try await persistAndPublish()
         startProcessorIfNeeded()
+    }
+
+    func dismissFailure(jobID: UUID) async throws {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        guard jobs[index].phase == .failed
+                || jobs[index].stemCleanupState == .failed else {
+            return
+        }
+        jobs[index].failureDismissed = true
+        jobs[index].updatedAt = Date()
+        try await persistAndPublish()
     }
 
     func retryStemCleanup(jobID: UUID) async throws {
@@ -111,6 +124,7 @@ actor TranscriptionQueue {
         }
         jobs[index].stemCleanupState = .pending
         jobs[index].stemCleanupFailureReason = nil
+        jobs[index].failureDismissed = nil
         jobs[index].updatedAt = Date()
         try await persistAndPublish()
         startProcessorIfNeeded()
@@ -243,6 +257,7 @@ actor TranscriptionQueue {
         jobs[index].stemCleanupFailureReason = failures.isEmpty
             ? nil
             : "文字起こし用一時ファイルの削除に失敗しました: \(failures.joined(separator: ", "))"
+        jobs[index].failureDismissed = failures.isEmpty ? nil : false
         jobs[index].updatedAt = Date()
         do {
             try await persistAndPublish()
@@ -267,6 +282,10 @@ actor TranscriptionQueue {
         for url in [job.systemAudioURL, job.microphoneAudioURL] {
             guard fileManager.fileExists(atPath: url.path) else {
                 throw TranscriptionError.missingTemporaryFile(url)
+            }
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            guard let fileSize = values.fileSize, fileSize > 0 else {
+                throw TranscriptionError.emptyAudioFile(url)
             }
         }
     }
@@ -333,6 +352,7 @@ actor TranscriptionQueue {
         jobs[index].phase = phase
         jobs[index].progress = min(max(progress, 0), 1)
         jobs[index].failureReason = nil
+        jobs[index].failureDismissed = nil
         jobs[index].updatedAt = Date()
         try await persistAndPublish()
     }
@@ -354,6 +374,7 @@ actor TranscriptionQueue {
         jobs[index].phase = .failed
         jobs[index].failureReason = (error as? LocalizedError)?.errorDescription
             ?? error.localizedDescription
+        jobs[index].failureDismissed = false
         jobs[index].updatedAt = Date()
         do {
             try await persistAndPublish()
@@ -392,6 +413,7 @@ actor TranscriptionQueue {
         replacement.phase = job.phase
         replacement.progress = job.progress
         replacement.failureReason = job.failureReason
+        replacement.failureDismissed = job.failureDismissed
         replacement.stemCleanupState = job.stemCleanupState
         replacement.stemCleanupFailureReason = job.stemCleanupFailureReason
         replacement.createdAt = job.createdAt

@@ -47,6 +47,7 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let logger = Logger(subsystem: "jp.sotto.Sotto", category: "ScreenCapture")
     private let audioHandler: AudioHandler
     private let stopHandler: StopHandler
+    private let microphoneDeviceID: String?
     private let systemNormalizer: AudioFormatNormalizer
     private let microphoneNormalizer: AudioFormatNormalizer
     private let systemQueue = DispatchQueue(label: "jp.sotto.capture.system-audio")
@@ -59,13 +60,18 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var loggedSystemFormat = false
     private var loggedMicrophoneFormat = false
 
-    init(audioHandler: @escaping AudioHandler, stopHandler: @escaping StopHandler) throws {
+    init(
+        microphoneDeviceID: String? = nil,
+        audioHandler: @escaping AudioHandler,
+        stopHandler: @escaping StopHandler
+    ) throws {
         guard let systemNormalizer = AudioFormatNormalizer(),
               let microphoneNormalizer = AudioFormatNormalizer() else {
             throw ScreenCaptureSessionError.normalizerUnavailable
         }
         self.audioHandler = audioHandler
         self.stopHandler = stopHandler
+        self.microphoneDeviceID = microphoneDeviceID
         self.systemNormalizer = systemNormalizer
         self.microphoneNormalizer = microphoneNormalizer
         super.init()
@@ -105,6 +111,7 @@ final class ScreenCaptureSession: NSObject, SCStreamOutput, SCStreamDelegate, @u
         configuration.showsCursor = false
         configuration.capturesAudio = true
         configuration.captureMicrophone = true
+        configuration.microphoneCaptureDeviceID = microphoneDeviceID
         configuration.sampleRate = Int(AudioFormatNormalizer.sampleRate)
         configuration.channelCount = Int(AudioFormatNormalizer.channelCount)
         configuration.excludesCurrentProcessAudio = true

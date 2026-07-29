@@ -3,6 +3,141 @@ import XCTest
 @testable import Sotto
 
 final class TranscriptionRecoveryTests: XCTestCase {
+    func testDismissedFailureIsPersistedWithoutRemovingAudioFiles() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mixedURL = directory.appendingPathComponent("recording.m4a")
+        let systemURL = directory.appendingPathComponent("system.m4a")
+        let microphoneURL = directory.appendingPathComponent("microphone.m4a")
+        for url in [mixedURL, systemURL, microphoneURL] {
+            try Data("audio".utf8).write(to: url)
+        }
+
+        var job = makeJob(
+            mixedURL: mixedURL,
+            systemURL: systemURL,
+            microphoneURL: microphoneURL
+        )
+        job.phase = .failed
+        job.failureReason = "test"
+        let store = try TranscriptionJobStore(
+            storeURL: directory.appendingPathComponent("jobs.json")
+        )
+        try store.save([job])
+        let queue = try TranscriptionQueue(
+            store: store,
+            modelManager: SpeechModelManager()
+        )
+
+        try await queue.dismissFailure(jobID: job.id)
+
+        XCTAssertEqual(try store.load().first?.failureDismissed, true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mixedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: systemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: microphoneURL.path))
+    }
+
+    func testEmptyTemporaryAudioFailsWithActionableReason() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mixedURL = directory.appendingPathComponent("recording.m4a")
+        let systemURL = directory.appendingPathComponent("system.m4a")
+        let microphoneURL = directory.appendingPathComponent("microphone.m4a")
+        try Data("audio".utf8).write(to: mixedURL)
+        try Data().write(to: systemURL)
+        try Data().write(to: microphoneURL)
+
+        let store = try TranscriptionJobStore(
+            storeURL: directory.appendingPathComponent("jobs.json")
+        )
+        let queue = try TranscriptionQueue(
+            store: store,
+            modelManager: SpeechModelManager()
+        )
+
+        try await queue.enqueue(
+            makeJob(
+                mixedURL: mixedURL,
+                systemURL: systemURL,
+                microphoneURL: microphoneURL
+            )
+        )
+        try await waitUntil {
+            await queue.allJobs().first?.phase == .failed
+        }
+
+        let failure = await queue.allJobs().first?.failureReason
+        XCTAssertEqual(
+            failure,
+            "文字起こし用一時ファイルに音声がありません: system.m4a"
+        )
+    }
+
+    func testEmptyFinalizedRecordingIsPreservedAndNotQueued() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recordingFolder = directory.appendingPathComponent("recordings", isDirectory: true)
+        let cacheFolder = directory.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: recordingFolder,
+            withIntermediateDirectories: true
+        )
+        let store = try TranscriptionJobStore(
+            storeURL: directory.appendingPathComponent("jobs.json")
+        )
+        let queue = try TranscriptionQueue(
+            store: store,
+            modelManager: SpeechModelManager()
+        )
+        let coordinator = EmptySuccessfulCoordinator()
+        let service = try SottoRecordingService(
+            transcriptionQueue: queue,
+            coordinator: coordinator,
+            cacheRoot: cacheFolder,
+            permissionRequester: {}
+        )
+        let settings = RecordingLaunchSettings(
+            bitrate: 128_000,
+            microphoneGain: 0.7,
+            systemGain: 0.7,
+            microphoneDeviceID: "selected-microphone",
+            transcriptionEnabled: true,
+            keepTemporaryFiles: false
+        )
+
+        try await service.startRecording(in: recordingFolder, settings: settings)
+        let capturedSettings = await coordinator.settings
+        XCTAssertEqual(capturedSettings?.microphoneDeviceID, "selected-microphone")
+        let capturedDestination = await coordinator.destination
+        let destination = try XCTUnwrap(capturedDestination)
+        for url in [
+            destination.mixedFileURL,
+            try XCTUnwrap(destination.systemStemURL),
+            try XCTUnwrap(destination.microphoneStemURL),
+        ] {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data().write(to: url)
+        }
+
+        do {
+            _ = try await service.stopRecording()
+            XCTFail("空の録音が成功扱いになりました。")
+        } catch RecordingServiceError.noAudioCaptured(let url) {
+            XCTAssertEqual(url, destination.mixedFileURL)
+        } catch {
+            XCTFail("想定外のエラー: \(error)")
+        }
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: destination.mixedFileURL.path)
+        )
+        let queuedJobs = await queue.allJobs()
+        XCTAssertTrue(queuedJobs.isEmpty)
+    }
+
     func testFailedStemCleanupIsPersistedAndRetriedAfterRestartWithoutDeletingMixedFile() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -195,6 +330,7 @@ final class TranscriptionRecoveryTests: XCTestCase {
             bitrate: 128_000,
             microphoneGain: 0.7,
             systemGain: 0.7,
+            microphoneDeviceID: nil,
             transcriptionEnabled: true,
             keepTemporaryFiles: false
         )
@@ -360,6 +496,36 @@ private actor FinalizeFailingCoordinator: RecordingCoordinating {
 
     func stop() {
         state = .failed(message: "injected finalize failure")
+    }
+
+    func currentState() -> RecordingState {
+        state
+    }
+}
+
+private actor EmptySuccessfulCoordinator: RecordingCoordinating {
+    private(set) var destination: RecordingSegmentDestination?
+    private(set) var settings: RecordingCoreSettings?
+    private var state: RecordingState = .idle
+
+    func setAudioLevelHandler(_ handler: RecordingCoordinator.AudioLevelHandler?) {}
+
+    func start(
+        settings: RecordingCoreSettings,
+        segmentProvider: @escaping RecordingCoordinator.SegmentProvider
+    ) async throws {
+        self.settings = settings
+        let destination = try await segmentProvider(1)
+        self.destination = destination
+        state = .recording(
+            startedAt: Date(),
+            segment: 1,
+            fileURL: destination.mixedFileURL
+        )
+    }
+
+    func stop() {
+        state = .idle
     }
 
     func currentState() -> RecordingState {
