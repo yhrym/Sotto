@@ -161,6 +161,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+#if DEBUG
+    func runDevelopmentSmokeTest(duration: TimeInterval) async {
+        guard recordingState == .idle, duration > 0 else {
+            return
+        }
+
+        startRecording()
+        while recordingState == .starting {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard recordingState.isRecording else {
+            return
+        }
+
+        try? await Task.sleep(for: .seconds(duration))
+        guard recordingState.isRecording else {
+            return
+        }
+
+        stopRecording()
+        while recordingState == .stopping {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+#endif
+
     func toggleInputMonitoring() {
         guard !recordingState.isBusy, !isInputMonitoringTransitioning else {
             return

@@ -108,6 +108,17 @@ sudo ditto \
   /Applications/Sotto.app
 ```
 
+反復開発では、ローカル開発用証明書を使ったDebugビルド、Applications版の安全な
+更新、起動、合成テスト音声の再生をスクリプトで行えます。録音・文字起こし中の
+Applications版は更新しません。
+
+```bash
+scripts/dev-install.zsh
+scripts/dev-smoke.zsh
+```
+
+初回準備と安全動作の詳細は[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)を参照してください。
+
 ## ネットワーク通信について
 
 Sottoのプロセスはネットワーク通信できません。

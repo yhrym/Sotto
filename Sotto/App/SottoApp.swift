@@ -6,6 +6,7 @@ struct SottoApp: App {
     @StateObject private var appModel: AppModel
 
     init() {
+        let resolvedAppModel: AppModel
         do {
             let modelManager = SpeechModelManager()
             let jobStore = try TranscriptionJobStore()
@@ -21,20 +22,26 @@ struct SottoApp: App {
                 transcriptionQueue: queue
             )
             let inputMonitor = SottoInputMonitor()
-            _appModel = StateObject(
-                wrappedValue: AppModel(
-                    recordingService: recordingService,
-                    transcriptionService: transcriptionService,
-                    inputMonitor: inputMonitor
-                )
+            resolvedAppModel = AppModel(
+                recordingService: recordingService,
+                transcriptionService: transcriptionService,
+                inputMonitor: inputMonitor
             )
         } catch {
-            _appModel = StateObject(
-                wrappedValue: AppModel(
-                    initialFailureMessage: "Sottoの初期化に失敗しました: \(error.localizedDescription)"
-                )
+            resolvedAppModel = AppModel(
+                initialFailureMessage: "Sottoの初期化に失敗しました: \(error.localizedDescription)"
             )
         }
+        _appModel = StateObject(wrappedValue: resolvedAppModel)
+
+#if DEBUG
+        if let duration = Self.developmentSmokeTestDuration() {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                await resolvedAppModel.runDevelopmentSmokeTest(duration: duration)
+            }
+        }
+#endif
     }
 
     var body: some Scene {
@@ -52,4 +59,17 @@ struct SottoApp: App {
                 .environmentObject(appModel)
         }
     }
+
+#if DEBUG
+    private static func developmentSmokeTestDuration() -> TimeInterval? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--sotto-development-smoke-test"),
+              arguments.indices.contains(flagIndex + 1),
+              let duration = TimeInterval(arguments[flagIndex + 1]),
+              (5...300).contains(duration) else {
+            return nil
+        }
+        return duration
+    }
+#endif
 }
