@@ -20,17 +20,13 @@ struct MenuBarLabel: View {
     }
 
     private var menuBarIcon: some View {
-        ZStack {
-            Image("MenuBarIcon")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-
+        Group {
             if appModel.recordingState.isRecording {
-                Circle()
-                    .fill(.red)
-                    .frame(width: 4, height: 4)
-                    .offset(x: 3.5, y: 1)
+                Image("MenuBarGhostRecording")
+                    .renderingMode(.original)
+            } else {
+                Image("MenuBarGhost")
+                    .renderingMode(.template)
             }
         }
         .frame(width: 18, height: 18)

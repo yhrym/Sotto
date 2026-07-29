@@ -55,8 +55,13 @@ struct MenuBarContentView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
-                    Button("文字起こしを再実行") {
-                        appModel.retryLastFailedTranscription()
+                    HStack {
+                        Button("文字起こしを再実行") {
+                            appModel.retryLastFailedTranscription()
+                        }
+                        Button("閉じる") {
+                            appModel.dismissLastFailedTranscription()
+                        }
                     }
                     .font(.caption)
                 }

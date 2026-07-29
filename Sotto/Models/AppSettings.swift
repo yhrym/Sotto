@@ -28,6 +28,11 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(systemGain, forKey: Keys.systemGain) }
     }
 
+    /// An empty value follows the microphone selected in System Settings.
+    @Published var microphoneDeviceID: String {
+        didSet { defaults.set(microphoneDeviceID, forKey: Keys.microphoneDeviceID) }
+    }
+
     @Published var transcriptionEnabled: Bool {
         didSet { defaults.set(transcriptionEnabled, forKey: Keys.transcriptionEnabled) }
     }
@@ -44,6 +49,7 @@ final class AppSettings: ObservableObject {
         bitrate = Bitrate(rawValue: savedBitrate) ?? .kbps192
         microphoneGain = defaults.object(forKey: Keys.microphoneGain) as? Double ?? 0.7
         systemGain = defaults.object(forKey: Keys.systemGain) as? Double ?? 0.7
+        microphoneDeviceID = defaults.string(forKey: Keys.microphoneDeviceID) ?? ""
         transcriptionEnabled = defaults.object(forKey: Keys.transcriptionEnabled) as? Bool ?? true
         keepTemporaryFiles = defaults.object(forKey: Keys.keepTemporaryFiles) as? Bool ?? false
     }
@@ -52,6 +58,7 @@ final class AppSettings: ObservableObject {
         static let bitrate = "audio.bitrate"
         static let microphoneGain = "audio.microphoneGain"
         static let systemGain = "audio.systemGain"
+        static let microphoneDeviceID = "audio.microphoneDeviceID"
         static let transcriptionEnabled = "transcription.enabled"
         static let keepTemporaryFiles = "transcription.keepTemporaryFiles"
     }

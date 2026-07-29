@@ -28,6 +28,12 @@ build/
 # Locally packaged applications
 *.app
 
+# Local icon source/staging directories
+/Sotto-AppIcon/
+/SottoMenuBarAssets/
+/SottoRedEyesAssets/
+/Sotto/Assets.xcassets/MenuBarGhostRedEyes.imageset/
+
 # Local recordings and transcription scratch/output
 *.m4a
 *.aac

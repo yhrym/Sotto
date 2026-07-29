@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct SettingsView: View {
@@ -29,6 +30,18 @@ struct SettingsView: View {
             }
 
             Section("入力レベル") {
+                Picker("使用するマイク", selection: $appModel.settings.microphoneDeviceID) {
+                    Text("システム設定に従う").tag("")
+                    ForEach(appModel.microphoneChoices) { microphone in
+                        Text(microphone.name).tag(microphone.id)
+                    }
+                }
+                .disabled(
+                    appModel.recordingState.isBusy
+                        || appModel.isInputMonitoring
+                        || appModel.isInputMonitoringTransitioning
+                )
+
                 audioLevelRow(
                     title: "システム音声",
                     level: appModel.audioLevels.system,
@@ -111,6 +124,23 @@ struct SettingsView: View {
         .padding()
         .frame(width: 560, height: 620)
         .navigationTitle("Sotto 設定")
+        .onAppear {
+            appModel.refreshMicrophones()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: AVCaptureDevice.wasConnectedNotification
+            )
+        ) { _ in
+            appModel.refreshMicrophones()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: AVCaptureDevice.wasDisconnectedNotification
+            )
+        ) { _ in
+            appModel.refreshMicrophones()
+        }
         .onDisappear {
             appModel.stopInputMonitoring()
         }

@@ -13,6 +13,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.bitrate, .kbps192)
         XCTAssertEqual(settings.microphoneGain, 0.7)
         XCTAssertEqual(settings.systemGain, 0.7)
+        XCTAssertEqual(settings.microphoneDeviceID, "")
         XCTAssertTrue(settings.transcriptionEnabled)
         XCTAssertFalse(settings.keepTemporaryFiles)
     }
@@ -25,12 +26,14 @@ final class AppSettingsTests: XCTestCase {
         var settings: AppSettings? = AppSettings(defaults: defaults)
         settings?.bitrate = .kbps256
         settings?.microphoneGain = 0.5
+        settings?.microphoneDeviceID = "test-microphone"
         settings?.transcriptionEnabled = false
         settings = nil
 
         let restored = AppSettings(defaults: defaults)
         XCTAssertEqual(restored.bitrate, .kbps256)
         XCTAssertEqual(restored.microphoneGain, 0.5)
+        XCTAssertEqual(restored.microphoneDeviceID, "test-microphone")
         XCTAssertFalse(restored.transcriptionEnabled)
     }
 }

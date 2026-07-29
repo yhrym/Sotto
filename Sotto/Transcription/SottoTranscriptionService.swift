@@ -44,7 +44,7 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
 
     func retryLastFailure(destinationBookmark: Data?) async throws {
         if let failed = jobs
-            .filter({ $0.phase == .failed })
+            .filter({ $0.phase == .failed && $0.failureDismissed != true })
             .max(by: { $0.updatedAt < $1.updatedAt }) {
             try await queue.retry(
                 jobID: failed.id,
@@ -53,12 +53,27 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
             return
         }
         if let cleanupFailure = jobs
-            .filter({ $0.stemCleanupState == .failed })
+            .filter({
+                $0.stemCleanupState == .failed && $0.failureDismissed != true
+            })
             .max(by: { $0.updatedAt < $1.updatedAt }) {
             try await queue.retryStemCleanup(jobID: cleanupFailure.id)
             return
         }
         throw AppServiceUnavailableError.transcription
+    }
+
+    func dismissLastFailure() async throws {
+        let visibleFailures = jobs.filter {
+            ($0.phase == .failed || $0.stemCleanupState == .failed)
+                && $0.failureDismissed != true
+        }
+        guard let failure = visibleFailures.max(
+            by: { $0.updatedAt < $1.updatedAt }
+        ) else {
+            throw AppServiceUnavailableError.transcription
+        }
+        try await queue.dismissFailure(jobID: failure.id)
     }
 
     private func receive(_ jobs: [TranscriptionJob]) async {
@@ -98,7 +113,8 @@ actor SottoTranscriptionService: AppTranscriptionServicing {
             .min(by: { $0.createdAt < $1.createdAt })
         let failure = jobs
             .filter {
-                $0.phase == .failed || $0.stemCleanupState == .failed
+                ($0.phase == .failed || $0.stemCleanupState == .failed)
+                    && $0.failureDismissed != true
             }
             .max(by: { $0.updatedAt < $1.updatedAt })
             .flatMap { job in

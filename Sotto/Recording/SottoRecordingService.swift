@@ -10,6 +10,7 @@ enum RecordingServiceError: LocalizedError {
     case coordinatorFailedAndRecoveryFailed(recording: String, recovery: String)
     case segmentCreationFailed
     case transcriptionQueueUnavailable
+    case noAudioCaptured(URL)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +30,8 @@ enum RecordingServiceError: LocalizedError {
             "分割録音ファイルの保存先を作成できませんでした。"
         case .transcriptionQueueUnavailable:
             "文字起こし用一時ファイルの回復情報を保存できないため、録音を開始できません。"
+        case let .noAudioCaptured(url):
+            "音声データが記録されませんでした。入力を確認してください。空の録音ファイルは保存されています: \(url.lastPathComponent)"
         }
     }
 }
@@ -139,6 +142,7 @@ actor SottoRecordingService: AppRecordingServicing {
                     bitRate: settings.bitrate,
                     systemGain: settings.systemGain,
                     microphoneGain: settings.microphoneGain,
+                    microphoneDeviceID: settings.microphoneDeviceID,
                     transcriptionEnabled: settings.transcriptionEnabled
                 )
             ) { [weak self] segmentNumber in
@@ -200,10 +204,24 @@ actor SottoRecordingService: AppRecordingServicing {
             throw RecordingServiceError.coordinatorFailed(message)
         }
 
+        if let emptyRecording = completedSegments
+            .map(\.destination.mixedFileURL)
+            .first(where: { !containsAudioData(at: $0) }) {
+            throw RecordingServiceError.noAudioCaptured(emptyRecording)
+        }
+
         if let transcriptionQueue, !jobs.isEmpty {
             try await transcriptionQueue.enqueue(jobs)
         }
         return completedSegments.last?.destination.mixedFileURL
+    }
+
+    private func containsAudioData(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize else {
+            return false
+        }
+        return fileSize > 0
     }
 
     private func persistFailedSegments(reason: String) async -> Error? {

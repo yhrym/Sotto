@@ -33,6 +33,7 @@ protocol AppTranscriptionServicing: Sendable {
     func setStatusHandler(_ handler: StatusHandler?) async
     func prepareModelIfNeeded() async
     func retryLastFailure(destinationBookmark: Data?) async throws
+    func dismissLastFailure() async throws
 }
 
 protocol AppInputMonitoring: Sendable {
@@ -40,6 +41,7 @@ protocol AppInputMonitoring: Sendable {
     typealias StopHandler = @Sendable (Error) async -> Void
 
     func start(
+        microphoneDeviceID: String?,
         levelHandler: @escaping LevelHandler,
         stopHandler: @escaping StopHandler
     ) async throws
@@ -53,6 +55,7 @@ struct RecordingLaunchSettings: Sendable {
     let bitrate: Int
     let microphoneGain: Float
     let systemGain: Float
+    let microphoneDeviceID: String?
     let transcriptionEnabled: Bool
     let keepTemporaryFiles: Bool
 }
@@ -97,10 +100,15 @@ actor UnavailableTranscriptionService: AppTranscriptionServicing {
     func retryLastFailure(destinationBookmark: Data?) async throws {
         throw AppServiceUnavailableError.transcription
     }
+
+    func dismissLastFailure() async throws {
+        throw AppServiceUnavailableError.transcription
+    }
 }
 
 actor UnavailableInputMonitor: AppInputMonitoring {
     func start(
+        microphoneDeviceID: String?,
         levelHandler: @escaping LevelHandler,
         stopHandler: @escaping StopHandler
     ) async throws {
