@@ -53,9 +53,17 @@ Developer IDで署名していないため、初回だけ手順5が必要です�
 
 ## 使い方
 
-1. メニューバーのSottoを開く
+アプリを起動すると、メニューバーにSottoちゃんが出てきます。
+
+<img src=".github/assets/sotto-menubar-idle.png" width="80" alt="メニューバーで待機中のSotto">
+
+1. Sottoちゃんをクリック
 2. `録音開始`を押す
 3. 録音が終わったら`録音停止`を押す
+
+録音中はSottoちゃんの目が赤くなり、横に録音時間が表示されます。
+
+<img src=".github/assets/sotto-menubar-recording.png" width="160" alt="メニューバーで録音中のSotto">
 
 文字起こしは停止後にバックグラウンドで始まります。
 
